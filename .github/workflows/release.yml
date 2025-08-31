@@ -1,19 +1,75 @@
-name: Release bundle
+name: Release
+
 on:
   push:
     tags:
       - 'v*'
-permissions:
-  contents: write
+
 jobs:
-  release:
+  build-and-release:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Build bundle archive
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure scripts are executable
+        run: chmod +x scripts/*.sh
+
+      # Quick smoke tests to catch obvious packaging mistakes
+      - name: Bootstrap dry-run (domain guard)
+        run: ./scripts/bootstrap.sh --dry-run --domain example.com
+
+      - name: CLI help smoke test
+        run: ./scripts/actualctl --help
+
+      - name: Prepare dist folder
+        run: mkdir -p dist
+
+      # Create a manifest of included files for convenience
+      - name: Build MANIFEST
         run: |
-          zip -r "tkl-actual-bootstrap-${GITHUB_REF_NAME}.zip" .
-      - name: Publish GitHub Release
+          set -euo pipefail
+          # List files that will go into the archive (excluding junk)
+          find . \
+            -path './.git' -prune -o \
+            -path './dist' -prune -o \
+            -path './node_modules' -prune -o \
+            -name '.DS_Store' -prune -o \
+            -type f -print \
+          | sed 's|^\./||' \
+          | sort > dist/MANIFEST.txt
+          echo "Built MANIFEST with $(wc -l < dist/MANIFEST.txt) files"
+
+      - name: Zip bundle
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME}"
+          zipfile="dist/tkl-actual-bootstrap-${ver}.zip"
+          # Zip the repo contents using the same exclusions as the manifest above
+          zip -r "$zipfile" . \
+            -x '.git/*' \
+            -x 'dist/*' \
+            -x 'node_modules/*' \
+            -x '**/.DS_Store'
+          echo "Created $zipfile"
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: tkl-actual-bootstrap-${GITHUB_REF_NAME}.zip
+          name: ${{ github.ref_name }}
+          body: |
+            Automated release for ${{ github.ref_name }}.
+
+            See the project CHANGELOG for details:
+            https://github.com/DocCyblade/tkl-actual-bootstrap/blob/${{ github.ref_name }}/CHANGELOG.md
+          files: |
+            dist/tkl-actual-bootstrap-${{ github.ref_name }}.zip
+            dist/MANIFEST.txt
+            dist/SHA256SUMS

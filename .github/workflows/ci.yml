@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt
+
+      - name: ShellCheck (scripts)
+        run: shellcheck -x scripts/*.sh
+
+      - name: shfmt (diff only, no rewrite)
+        run: |
+          shfmt -d scripts || true
+
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure scripts are executable
+        run: chmod +x scripts/*.sh
+
+      # Bootstrap must accept --domain *when* provided with --dry-run;
+      # our v0.23.2 bootstrap also defaults to example.com if domain omitted.
+      - name: Bootstrap dry-run (explicit domain)
+        run: ./scripts/bootstrap.sh --dry-run --domain example.com
+
+      - name: CLI help smoke test
+        run: ./scripts/actualctl --help
+
+      - name: Doctor not required
+        run: echo "Skipping doctor: requires services/nginx running"

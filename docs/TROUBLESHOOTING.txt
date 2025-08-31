@@ -1,0 +1,27 @@
+Troubleshooting  (v0.23.2)
+==========================
+
+502 Bad Gateway
+---------------
+- actualctl health <instance>
+- journalctl -u <instance>-budgetapp -n 200
+- nginx -t
+- Check that /srv/<instance>/data/config.json port matches Nginx upstream
+- Ensure systemd service is running
+
+npm EACCES / cache issues
+-------------------------
+- Ensure:
+    ls -ld /home/budget-server /home/budget-server/.npm
+    chown -R budget-server:budget-server /home/budget-server
+- Installs run as "budget-server" (runuser; fallback su)
+
+Wrong domain / DNS
+------------------
+- Check /etc/actual-budget/env -> BUDGET_DOMAIN=...
+- DNS: development-budgetapp.<domain>, test-budgetapp.<domain>, production-budgetapp.<domain>
+
+Port conflicts
+--------------
+- actualctl instance set-port <instance> <new-port>
+- nginx -t && systemctl reload nginx

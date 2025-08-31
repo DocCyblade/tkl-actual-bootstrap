@@ -1,0 +1,97 @@
+CHANGELOG (cumulative)
+======================
+
+Project: tkl-actual-bootstrap
+License: GNU GPL v3
+Author : Ken Robinson <ken@turnkeylinux.org>
+Source : https://github.com/DocCyblade/tkl-actual-bootstrap
+
+1) WHAT’S NEW — v0.23.3
+-----------------------
+- Documentation
+  - Migrated all project docs to simple plain text (.txt): README.txt, CHANGELOG.txt, and docs/*.txt
+  - Merged historical entries from earlier Markdown/RST into CHANGELOG.txt (newest → oldest)
+  - Updated in-repo references to point to .txt docs
+
+- Note
+  - No functional code changes from v0.23.2 (bootstrap.sh and actualctl unchanged)
+  
+    
+WHAT’S NEW — v0.23.2
+-----------------------
+- General
+  - Documentation migrated to simple plain text (.txt) across the repo.
+  - Release packaging: exclude .git, node_modules, .DS_Store from bundles.
+
+- bootstrap.sh
+  - Installs "actualctl" by default (removed --install-ctl); still honors --ctl-path override.
+  - --domain must be paired with --yes (live) or --dry-run (preview); if omitted, bootstrap prompts.
+  - Systemd units hardened; graceful stop (SIGINT) and TimeoutStopSec=15.
+  - Uses configs/config.json.tpl as seed source (falls back to inline JSON if template missing).
+  - Nginx health endpoints: /healthz (edge) and /health/upstream (proxy to backend).
+
+- actualctl
+  - list shows only real version directories under /srv/app (v*), hides symlinks/npm artifacts.
+  - Help/usage banners synced with docs; readable header blocks.
+
+
+2) scripts/bootstrap.sh — full history (newest → oldest)
+--------------------------------------------------------
+- v0.23.3  Docs-only: headers synced to v0.23.3; references to CHANGELOG.txt/README.txt; no behavior change.
+- v0.23.2  Default-install actualctl; domain flag guard; hardened systemd units; health endpoints; CI/package tidy; plain-text docs.
+- v0.23.1  Documentation pass only (plain-text conversion); no functional changes.
+- v0.23.0  Docs refresh; default Actual version note updated.
+- v0.22.1  Merge fixes; resolved stale header conflicts; preserved previous docs.
+- v0.22.0  Addressed Issues #1–#4: exec bits on scripts; visible banners; help on no-args; Nginx templating fixes. Version headers aligned.
+- v0.21.1  File patches; no behavior change (alignment only).
+- v0.21.0  Rebrand to "tkl-actual-bootstrap"; GPLv3 license headers and LICENSE added; author/source headers standardized.
+- v0.20.4  Docs: removed personal references; no functional changes.
+- v0.20.3  Docs: added "Migration from pre–v0.20" and "Common port map"; no functional changes.
+- v0.20.2  Docs: CHANGELOG reordered newest→oldest; explicit TurnKey Linux NodeJS v18 prerequisite.
+- v0.20.1  Docs: standardized historical version labels to vXX.YY.ZZ.
+- v0.20.0  Bundle docs consolidated; each script links to CHANGELOG; quick start and layout added.
+- v0.19.0  Docs refresh; stronger domain handling notes; readability fixes.
+- v0.18.0  Generic domain prompt + /etc/actual-budget/env; base instances standardized to development/test/production; dynamic Nginx vhosts; /srv/app/production symlink introduced.
+- v0.17.0  Expanded changelog backfill; script headers reference the cumulative log.
+- v0.16.0  Header polish; explicit changelog references in scripts.
+- v0.15.0  General doc polish; minor examples clarified.
+- v0.14.0  Added Nginx health endpoints into vhosts (edge + upstream).
+- v0.13.0  True dry-run (no runuser during preview), path fixes, minimal chown scope.
+- v0.12.0  TurnKey TLS defaults; start-of-run confirmation added.
+- v0.11.0  npm HOME/cache moved to service user’s home; avoids /srv/.npm EACCES.
+- v0.10.0  Fixed service user handling; avoid chowning /srv root; run as "budget-server" via runuser/su.
+- v0.9.0   Ownership scoping under /srv/* only; do not change /srv root.
+- v0.8.0   Service user home under /home; do not assume sudo is installed.
+- v0.7.0   Fixed "ver" unbound variable; argument parsing nits.
+- v0.6.0   Added interactive flow and early dry-run pass.
+- v0.5.0   Idempotency checks improved for reruns.
+- v0.4.0   Inline documentation and clearer logging.
+- v0.3.0   First public bundle; partial README included.
+- v0.2.0   Instance directories and basic systemd unit templates introduced.
+- v0.1.0   Initial bootstrap skeleton (layout only).
+
+
+3) scripts/actualctl — full history (newest → oldest)
+-----------------------------------------------------
+- v0.23.3  Docs-only: headers synced to v0.23.3; references to CHANGELOG.txt/README.txt; no behavior change.
+- v0.23.2  list shows only /srv/app/v* dirs; hides symlinks and npm files; banners & quick-usage harmonized; help synced with docs.
+- v0.23.1  Documentation pass only (plain-text conversion); no functional changes.
+- v0.23.0  New/expanded commands and behavior:
+            - instance set-port <NAME> <PORT> updates /srv/<NAME>/data/config.json and restarts service.
+            - health [INSTANCE] checks Nginx upstream (/health/upstream) and backend reachability.
+            - doctor performs full system sanity (required tools, nginx -t, service state, listening port, upstream health).
+            - Dynamic instance discovery across /srv/*/data (not limited to dev/test/prod).
+- v0.22.1  Merge/conflict cleanups; preserved behavior.
+- v0.22.0  Doc bump & readability: version header updated; readable banner maintained.
+- v0.21.0  Rebrand to "tkl-actual-bootstrap"; GPLv3 headers added.
+- v0.20.4  Docs aligned; no functional change.
+- v0.20.3  Docs aligned; no functional change.
+- v0.20.2  Docs reordered newest→oldest; no functional change.
+- v0.20.1  Docs label normalization; parity with v0.20.0.
+- v0.20.0  Docs parity with bundle; adopted v0.xx version scheme.
+
+Notes
+-----
+- This plain-text file is the authoritative history going forward.
+- Script headers continue to include a small “since last revision” banner for quick reference.
+- Ordering is newest → oldest throughout.

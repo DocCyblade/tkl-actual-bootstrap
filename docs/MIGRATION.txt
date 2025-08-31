@@ -1,0 +1,25 @@
+Migration from pre–v0.20
+========================
+
+Goal:
+- Adopt instances: development, test, production
+- Use /etc/actual-budget/env for BUDGET_DOMAIN
+- Standardize Nginx/systemd layout with templates
+
+Steps:
+1) Back up:
+   /etc/nginx/sites-available/*actual*
+   /etc/systemd/system/*actual*
+   /srv/backups   (ensure recent instance backups)
+
+2) Stop old services; note previous ports/domains.
+
+3) Install new bundle; run bootstrap (dry-run, then live).
+
+4) Restore data archives if needed:
+   actualctl restore production /srv/backups/production-YYYYMMDD-HHMMSS.tgz
+
+5) Validate:
+   actualctl doctor
+   nginx -t
+   open health endpoints

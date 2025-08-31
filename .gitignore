@@ -1,19 +1,28 @@
-# OS/editor
+# tkl-actual-bootstrap — .gitignore (v0.23.2)
+# Keep this lean and focused on things that should never be committed.
+
+# ── OS / editor cruft ──────────────────────────────────────────────────────────
 .DS_Store
+**/.DS_Store
 Thumbs.db
 *.swp
+*~
 .vscode/
 .idea/
 
-# Archives & logs
+# ── Archives / bundles / build outputs ────────────────────────────────────────
+dist/
 *.zip
-*.tgz
-*.log
+*.tar.gz
+SHA256SUMS
+MANIFEST.txt
 
-# Node junk if ever created while testing
+# ── Node/npm noise (not used in this repo, but common in forks/tests) ─────────
 node_modules/
 npm-debug.log*
+package-lock.json
 
-# Python cache (if someone inspects in a venv)
-__pycache__/
-*.pyc
+# ── Local helper outputs from repo audits ─────────────────────────────────────
+_tree.txt
+_files-dates-sizes.txt
+_sha256.txt
