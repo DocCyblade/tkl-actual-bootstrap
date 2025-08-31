@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # tkl-actual-bootstrap : actualctl
-# Version: v0.22.1
+# Version: v0.23.1
 # Manage Actual Sync Server multi-instance on TurnKey Linux.
-# - Instances: development, test, production
-# - Links:     /srv/app/<instance> -> /srv/app/vX.Y.Z
-# - Data:      /srv/<instance>/data (ACTUAL_DATA_DIR)
-# - Units:     <instance>-budgetapp.service
+#
+# Recent changes (see CHANGELOG.md):
+# - v0.23.1: Fix `list` version display: show only version directories; avoid listing contents.
+# - v0.23.0: Add `instance set-port`, `health`, and `doctor`; help/README parity.
+# - v0.22.1: Default Actual version set; stable ExecStart.
+# - v0.22.0: Instance add/rm; backups prune; verify command.
+#
+# Instances: development, test, production (+ any discovered under /srv)
+# Links:     /srv/app/<instance> -> /srv/app/vX.Y.Z
+# Data:      /srv/<instance>/data (ACTUAL_DATA_DIR)
+# Units:     <instance>-budgetapp.service
 # NOTES:
 # * Run as root for commands that change the system (fetch/switch/backup/restore/instance/service).
 # * Idempotent where applicable.
@@ -19,8 +26,9 @@ set -Eeuo pipefail
 banner() {
   cat <<'BANNER'
 ┌──────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : actualctl  v0.22.1                            │
-│ Manage Actual Sync Server multi-instance (GPL-3.0-or-later)          │
+│ tkl-actual-bootstrap : actualctl                 v0.23.1   │
+│ Bootstrap for running Actual Sync Server on Turnkey Linux            │
+│ License: GPL-3.0-or-later                                            │
 │ Author: Ken Robinson <ken@turnkeylinux.org>                          │
 │ Source: https://github.com/DocCyblade/tkl-actual-bootstrap           │
 │ Hint:   actualctl --help                                             │
@@ -46,7 +54,9 @@ Commands (high level):
   help                          Show this help and exit
   list                          Show instances, symlink targets, and versions
   check                         Run basic health checks
-  env [INSTANCE]               Show environment & paths (all or one)
+  env [INSTANCE]                Show environment & paths (all or one)
+  health [INSTANCE]             Check Nginx upstream + backend health (all if omitted)
+  doctor                        Full system check (services, ports, nginx -t, upstream)
 
 Version & app mgmt:
   fetch <vX.Y.Z>                Install @actual-app/sync-server@<ver> into /srv/app/<ver>
@@ -59,11 +69,13 @@ Backups:
   prune-backups [--keep N]      Keep N most-recent per instance (default: 7)
 
 Instances:
-  instance add <NAME> <ver|development|test|production> [--from SRC]
+  instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT]
                                 Create /srv/<NAME>/data (optionally copy from SRC),
-                                create unit, link /srv/app/<NAME> -> target, start
+                                create unit, link /srv/app/<NAME> -> target, start.
+                                If --port omitted, picks next free port automatically.
   instance rm  <NAME> [--purge] Stop/disable unit, remove unit, (optional) delete /srv/<NAME>
-                                and nginx vhost symlinks
+  instance set-port <NAME> <PORT>
+                                Update /srv/<NAME>/data/config.json port and restart service
 
 Service wrappers:
   service <INSTANCE> start|stop|restart|status
@@ -71,11 +83,14 @@ Service wrappers:
 
 Examples:
   actualctl list
-  actualctl fetch v25.8.0
-  actualctl switch production v25.8.0
+  actualctl fetch v25.7.1
+  actualctl switch production v25.7.1
   actualctl backup production "pre-upgrade"
   actualctl restore production /srv/backups/production-20250101-120000-pre-upgrade.tgz
-  actualctl instance add staging v25.8.0 --from production
+  actualctl instance add staging v25.7.1 --from production --port 5002
+  actualctl instance set-port staging 5003
+  actualctl health production
+  actualctl doctor
   actualctl prune-backups --keep 10
 HELP
 }
@@ -123,12 +138,52 @@ json_get() { # json_get <file> <key>
   awk -v k="$2" -F': *' '/"'"$2"'"/ {gsub(/[",]/,"",$2); print $2; exit}' "$1" 2>/dev/null || true
 }
 
+# Discover instances dynamically (default three + any /srv/* with data dir)
+discover_instances() {
+  local seen=" development test production "
+  local out=(development test production)
+  local d n
+  for d in /srv/*; do
+    [[ -d "$d/data" ]] || continue
+    n="$(basename "$d")"
+    [[ "$seen" == *" $n "* ]] || { out+=("$n"); seen+=" $n "; }
+  done
+  printf '%s\n' "${out[@]}"
+}
+
+# Read domain from /etc/actual-budget/env (BUDGET_DOMAIN=...)
+read_domain() {
+  local f="/etc/actual-budget/env"
+  [[ -f "$f" ]] || return 1
+  local line; line="$(grep -E '^BUDGET_DOMAIN=' "$f" || true)"
+  [[ -n "$line" ]] || return 1
+  line="${line#BUDGET_DOMAIN=}"
+  line="${line%\"}"; line="${line#\"}"
+  printf '%s\n' "$line"
+}
+
+# Pick next free port >= 5002 not in use in any config.json
+pick_next_port() {
+  local used=()
+  local p
+  while IFS= read -r n; do
+    p="$(json_get "/srv/$n/data/config.json" port || true)"
+    [[ -n "$p" ]] && used+=("$p")
+  done < <(discover_instances)
+  for ((p=5002; p<65535; p++)); do
+    local found=0
+    for x in "${used[@]}"; do [[ "$x" = "$p" ]] && { found=1; break; }; done
+    [[ $found -eq 0 ]] && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+
 #######################################
 # Introspection
 #######################################
 cmd_list() {
   printf "%-12s %-28s %s\n" "INSTANCE" "LINK->VERSION" "SERVICE"
-  for inst in "${INSTANCES[@]}"; do
+  while IFS= read -r inst; do
     local link="${BASE_APP}/${inst}"
     local target="(none)"
     if [[ -L "$link" ]]; then
@@ -138,10 +193,21 @@ cmd_list() {
     local state
     state="$(systemctl is-active "$svc" 2>/dev/null || echo inactive)"
     printf "%-12s %-28s %s\n" "$inst" "${target#${BASE_APP}/}" "$state"
-  done
+  done < <(discover_instances)
   echo
   echo "Available versions under ${BASE_APP}:"
-  (ls -1 "${BASE_APP}"/v* 2>/dev/null || true) | sed "s#^${BASE_APP}/##" | sort -V
+  # Show only version directories (v*), not their contents; ignore symlinks like 'development'
+  local vs=()
+  shopt -s nullglob
+  for d in "${BASE_APP}"/v*; do
+    [[ -d "$d" ]] && vs+=("$(basename "$d")")
+  done
+  shopt -u nullglob
+  if ((${#vs[@]})); then
+    printf "%s\n" "${vs[@]}" | sort -V
+  else
+    echo "(none)"
+  fi
 }
 
 cmd_check() {
@@ -150,22 +216,21 @@ cmd_check() {
   for c in node npm systemctl nginx; do
     if ! command -v "$c" >/dev/null 2>&1; then err "Missing: $c"; ok=0; fi
   done
-  for inst in "${INSTANCES[@]}"; do
+  while IFS= read -r inst; do
     local dat="/srv/${inst}/data"
     [[ -d "$dat" ]] || { err "Missing data dir: $dat"; ok=0; }
     local svc="${inst}-budgetapp.service"
     systemctl status "$svc" >/dev/null 2>&1 || warn "Service not active: $svc"
-  done
+  done < <(discover_instances)
   [[ $ok -eq 1 ]] && log "check: OK" || die "check: FAIL"
 }
 
 cmd_env() {
   local inst="${1:-}"
   if [[ -z "$inst" ]]; then
-    for i in "${INSTANCES[@]}"; do
-      cmd_env "$i"
-      echo
-    done
+    while IFS= read -r i; do
+      cmd_env "$i"; echo
+    done < <(discover_instances)
     return 0
   fi
   local dat="/srv/${inst}/data"
@@ -276,7 +341,11 @@ cmd_prune_backups() {
     keep="${2:-7}"
   fi
   mkdir -p "$BACKUPS"
-  for inst in "${INSTANCES[@]}"; do
+  for inst in $(discover_instances); do
+    :
+  done
+  for inst in "${INSTANCES[@]}"; do :; done # keep declared default instances available
+  for inst in $(discover_instances); do
     mapfile -t files < <(ls -1t "$BACKUPS"/${inst}-*.tgz 2>/dev/null || true)
     if (( ${#files[@]} > keep )); then
       for f in "${files[@]:$keep}"; do
@@ -319,12 +388,16 @@ cmd_instance_add() {
   require_root
   local name="${1:-}"
   local target="${2:-}"
-  local fromInst=""
-  [[ -n "$name" && -n "$target" ]] || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC]"
+  local fromInst="" want_port=""
+  [[ -n "$name" && -n "$target" ]] || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC] [--port PORT]"
   shift 2
-  if [[ "${1:-}" == "--from" ]]; then
-    fromInst="${2:-}"; shift 2
-  fi
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) fromInst="${2:-}"; shift 2;;
+      --port) want_port="${2:-}"; shift 2;;
+      *) err "Unknown option: $1"; return 2;;
+    esac
+  done
 
   local dat="/srv/${name}/data"
   mkdir -p "$dat"
@@ -346,11 +419,30 @@ cmd_instance_add() {
   fi
   ln -sfn "$tgt" "$link"
 
+  # ensure config.json with port
+  local cfg="${dat}/config.json"
+  local host="127.0.0.1"
+  local port=""
+  if [[ -n "$want_port" ]]; then
+    port="$want_port"
+  else
+    port="$(pick_next_port || true)"
+    [[ -n "$port" ]] || die "Unable to find an available port"
+  fi
+  {
+    echo "{"
+    echo "  \"port\": ${port},"
+    echo "  \"hostname\": \"${host}\""
+    echo "}"
+  } > "$cfg"
+  chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
+
   local unit="/etc/systemd/system/${name}-budgetapp.service"
   _unit_text "$name" > "$unit"
   systemctl daemon-reload
   systemctl enable --now "${name}-budgetapp.service"
   log "instance add: $name -> $(basename "$tgt")"
+  log "instance add: ${name} port=${port}"
 }
 
 cmd_instance_rm() {
@@ -372,6 +464,26 @@ cmd_instance_rm() {
   log "instance rm: $name"
 }
 
+cmd_instance_set_port() {
+  require_root
+  local name="${1:-}" newp="${2:-}"
+  [[ -n "$name" && -n "$newp" ]] || die "Usage: actualctl instance set-port <NAME> <PORT>"
+  [[ "$newp" =~ ^[0-9]+$ ]] || die "PORT must be numeric"
+  local dat="/srv/${name}/data"; local cfg="${dat}/config.json"
+  [[ -d "$dat" ]] || die "Instance data dir not found: $dat"
+  local host; host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
+  local tmp; tmp="$(mktemp)"; {
+    echo "{"
+    echo "  \"port\": ${newp},"
+    echo "  \"hostname\": \"${host}\""
+    echo "}"
+  } > "$tmp"
+  install -m 0644 "$tmp" "$cfg"; rm -f "$tmp"
+  chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
+  systemctl restart "${name}-budgetapp.service"
+  log "instance set-port: ${name} -> ${newp}"
+}
+
 #######################################
 # Service wrappers
 #######################################
@@ -390,12 +502,101 @@ cmd_logs() {
 }
 
 #######################################
+# Health checks
+#######################################
+_curl_code() { # _curl_code <url>
+  curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 --insecure "$1" || true
+}
+
+cmd_health() {
+  local inst="${1:-}"
+  local domain; domain="$(read_domain || true)"
+  local rc=0
+  if [[ -z "$inst" ]]; then
+    while IFS= read -r i; do cmd_health "$i" || rc=1; done < <(discover_instances)
+    [[ $rc -eq 0 ]] || return 1
+    return 0
+  fi
+  local cfg="/srv/${inst}/data/config.json"
+  local port; port="$(json_get "$cfg" port)"
+  [[ -n "$port" ]] || { err "health: no port in $cfg"; return 1; }
+  # upstream via nginx (if domain known)
+  if [[ -n "$domain" ]]; then
+    local host="${inst}-budgetapp.${domain}"
+    local up="https://${host}/health/upstream"
+    local code; code="$(_curl_code "$up")"
+    if [[ "$code" == "200" ]]; then
+      log "health: upstream OK (${inst}) 200 ${up}"
+    else
+      err "health: upstream FAIL (${inst}) code=${code:-NA} ${up}"
+      rc=1
+    fi
+  else
+    warn "health: domain not set in /etc/actual-budget/env; skipping upstream check for ${inst}"
+  fi
+  # backend direct
+  local be="http://127.0.0.1:${port}/"
+  local bcode; bcode="$(_curl_code "$be")"
+  if [[ "$bcode" == "200" || "$bcode" == "404" ]]; then
+    log "health: backend OK (${inst}) code=${bcode} ${be}"
+  else
+    err "health: backend FAIL (${inst}) code=${bcode:-NA} ${be}"
+    rc=1
+  fi
+  [[ $rc -eq 0 ]]
+}
+
+cmd_doctor() {
+  require_root
+  local ok=1
+  # tools
+  for c in node npm systemctl nginx curl ss; do
+    command -v "$c" >/dev/null 2>&1 || { err "doctor: missing tool: $c"; ok=0; }
+  done
+  # nginx syntax
+  if nginx -t >/dev/null 2>&1; then
+    log "doctor: nginx -t OK"
+  else
+    err "doctor: nginx -t FAILED"; ok=0
+  fi
+  # per instance
+  while IFS= read -r inst; do
+    local svc="${inst}-budgetapp.service"
+    if systemctl is-active --quiet "$svc"; then
+      log "doctor: service OK ${svc}"
+    else
+      err "doctor: service NOT ACTIVE ${svc}"; ok=0
+    fi
+    local cfg="/srv/${inst}/data/config.json"
+    local port; port="$(json_get "$cfg" port)"
+    if [[ -z "$port" ]]; then
+      err "doctor: ${inst} missing port in ${cfg}"; ok=0
+    else
+      if ss -ltn | awk '{print $4}' | grep -q ":${port}$"; then
+        log "doctor: port listen OK ${inst}:${port}"
+      else
+        err "doctor: port NOT LISTENING ${inst}:${port}"; ok=0
+      fi
+    fi
+  done < <(discover_instances)
+  # upstreams
+  if cmd_health >/dev/null; then
+    log "doctor: upstream health OK"
+  else
+    err "doctor: upstream health FAILED"; ok=0
+  fi
+  [[ $ok -eq 1 ]] && log "doctor: OK" || { err "doctor: FAIL"; return 1; }
+}
+
+#######################################
 # Dispatch
 #######################################
 case "${1:-}" in
   list)              shift; cmd_list "$@";;
   check)             shift; cmd_check "$@";;
   env)               shift; cmd_env "$@";;
+  health)            shift; cmd_health "$@";;
+  doctor)            shift; cmd_doctor "$@";;
 
   fetch)             shift; cmd_fetch "$@";;
   switch)            shift; cmd_switch "$@";;
@@ -407,8 +608,9 @@ case "${1:-}" in
 
   instance)          shift;
                      case "${1:-}" in
-                       add) shift; cmd_instance_add "$@";;
-                       rm)  shift; cmd_instance_rm "$@";;
+                       add)       shift; cmd_instance_add "$@";;
+                       rm)        shift; cmd_instance_rm "$@";;
+                       set-port)  shift; cmd_instance_set_port "$@";;
                        *)   err "Unknown: instance ${1:-}"; usage_quick; exit 2;;
                      esac
                      ;;

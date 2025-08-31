@@ -1,102 +1,43 @@
-# actualctl — Documentation (v0.22.0)
+# README — scripts/actualctl (v0.23.1)
 
-**Project:** tkl-actual-bootstrap  
-**Author:** Ken Robinson (<ken@turnkeylinux.org>)  
-**License:** GPL-3.0-or-later — see [LICENSE](../LICENSE)  
-**Source:** https://github.com/DocCyblade/tkl-actual-bootstrap
+Helper to manage versions, instances, and backups for Actual Sync Server.
 
-**Latest changes:** See root `CHANGELOG.md` → `scripts/actualctl`.
-
-## Summary
-`actualctl` wraps common operational tasks for multi-instance Actual deployments.
-
-It reads defaults from `/etc/actual-budget/env` (notably `BUDGET_DOMAIN`).
-
-## Commands & Examples
-
-### Service controls
+## Quick usage
 ```
-actualctl <INSTANCE> <logs|status|start|stop|restart>
-```
-Examples:
-```
-actualctl production status
-actualctl test logs
-actualctl development restart
+actualctl <command> [args]
 ```
 
-### Reset admin password (per instance)
-```
-actualctl reset-password <INSTANCE>
-```
+## Commands
+- `help` — full help
+- `list` — instances and symlink targets
+- `check` — basic health checks
+- `env [INSTANCE]` — show ACTUAL_DATA_DIR, config, link target
+- `health [INSTANCE]` — check Nginx upstream and backend for one or all instances
+- `doctor` — full system check (services, ports, nginx -t, upstream)
 
-### Interactive shell in the app directory (as budget-server)
-```
-actualctl shell <INSTANCE>
-```
+### Version & app
+- `fetch <vX.Y.Z>` : install version to `/srv/app/<ver>`
+- `switch <INSTANCE> <vX.Y.Z>` : relink and restart
+- `verify <vX.Y.Z>` : temp install + presence check of module
 
-### Version management
-```
-actualctl fetch <VERSION>                # e.g., v25.9.2
-actualctl switch <production|test|development> <VERSION>
-```
-Examples:
-```
-actualctl fetch v25.9.2
-actualctl switch development v25.9.2
-```
+### Backups
+- `backup <INSTANCE> [note]` -> `/srv/backups/<instance>-<ts>[-note].tgz`
+- `restore <INSTANCE> <tgz>` : stop, backup current, restore, chown, start
+- `prune-backups [--keep N]` : keep N newest per instance
 
-### Backup & restore
-```
-actualctl backup <INSTANCE>
-actualctl restore <INSTANCE> <TARBALL>
-```
-Examples:
-```
-actualctl backup production
-actualctl restore production /srv/backups/production-20250101-120000.tgz
-```
+### Instances
+- `instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT]`  
+  Creates `/srv/<NAME>/data`, optional copy from `SRC`, links `/srv/app/<NAME>` to target.  
+  If `--port` is omitted, the next free port is auto-selected (>= 5002).
+- `instance rm  <NAME> [--purge]`
+- `instance set-port <NAME> <PORT>`  
+  Updates `/srv/<NAME>/data/config.json` with the new port and restarts the service.
 
-### Prune backups
-```
-actualctl prune-backups <INSTANCE> --keep N
-```
-Example:
-```
-actualctl prune-backups production --keep 10
-```
-
-### Environment inspection
-```
-actualctl env <INSTANCE>
-```
-Shows data dir, link target, port, and paths.
-
-### Sanity checks
-```
-actualctl check
-```
-Checks core binaries, service user, symlinks, services, ports, TLS files, and `nginx -t`.
-
-### Verify a version (safe preflight)
-```
-actualctl verify <VERSION> [--keep]
-```
-- Installs to `/srv/app/_verify/<VERSION>`
-- Runs `actual-server --version`
-- Deletes temp install unless `--keep` is provided
-
-### Create / remove instances
-```
-actualctl instance add <NAME> --link <production|test|development> [--fqdn HOST] [--port N] [--copy-from SRC] [--no-nginx] [--yes]
-actualctl instance rm  <NAME> [--keep-data] [--yes]
-```
-Examples:
-```
-actualctl instance add personal --link production --fqdn personal-budgetapp.example.com --copy-from production --yes
-actualctl instance rm personal --keep-data --yes
-```
+### Services
+- `service <INSTANCE> start|stop|restart|status`
+- `logs <INSTANCE> [lines]`
 
 ## Notes
-- All npm operations run as the `budget-server` user with its own HOME and cache to avoid permission issues under `/srv`.
-- Ports: by default choose next free ≥5000 (reserving 5006 for development unless explicitly requested).
+- `list` prints only version **directories** found under `/srv/app` (e.g., `v25.7.1`), not their contents.
+- Run as root for commands that change the system.
+- Units call `./node_modules/.bin/actual-server`.

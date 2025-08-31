@@ -1,65 +1,77 @@
-# Changelog
+# Changelog — tkl-actual-bootstrap
 
-**Versioning note:** Now using semantic-style labels vXX.YY.ZZ.
+This changelog is **cumulative** and organized into three parts:
+1) **What’s New** — high-level summary for the most recent release (all scripts)
+2) **scripts/actualctl — Full History** (newest first)
+3) **scripts/bootstrap.sh — Full History** (newest first)
 
-**Versioning note:** Starting v0.20, bundles use the v0.xx scheme. Prior release v19 = v0.19.
+---
 
+## 1) What’s New — v0.23.1 (2025-08-31)
+- **scripts/actualctl v0.23.1**
+  - Fix: `actualctl list` now shows only **version directories** under `/srv/app` (e.g., `v25.7.1`) and never lists symlinked directory contents.
+- **scripts/bootstrap.sh**
+  - No changes since **v0.23.0** (help/UX parity, safer Nginx fallback, idempotency, domain handling).
 
-This changelog tracks script-level changes. Entries v1–v9 are reconstructed;
-v10+ reflects our formalized bundles. Each script also includes a brief delta
-in the header for quick reference.
+---
 
-## scripts/bootstrap.sh
-- **v0.22.0** — Doc bump & readability: version header updated; readable heredoc banner; help on no-args; nginx templating already present.
-- **v0.21.0** — Docs: rebranded to tkl-actual-bootstrap; added GPLv3 licensing blocks and LICENSE.
-- **v0.20.4** — Docs: removed personal references; no functional changes.
-- **v0.20.4** — Docs: added Migration from pre–v0.20 and Common port map to README; no functional changes.
-- **v0.20.2** — Docs: CHANGELOG reordered newest→oldest; added explicit TurnKey Linux v18.0 prerequisite; no functional changes.
-- **v0.20.1** — Docs: standardized historical version labels to vXX.YY.ZZ (no functional changes).
-- **v0.20.0** — Docs: added Prerequisites & Troubleshooting; adopted v0.xx scheme (no functional changes).
-- **v0.19.0** — Docs refresh; stronger domain handling; minor readability/typo fixes.
-- **v0.18.0** — Generic domain; base instances: development/test/production; production symlink.
-- **v0.17.0** — Expanded changelog back to v1–v9.
-- **v0.16.0** — Headers + changelog references.
-- **v0.15.0** — Doc polish.
-- **v0.14.0** — Nginx health checks added in vhosts (edge and upstream).
-- **v0.13.0** — True dry-run (no runuser); path fixes; minimal chown scope.
-- **v0.12.0** — TurnKey TLS defaults; start-of-run prompt.
-- **v0.11.0** — npm HOME/cache moved to service user; avoid `/srv/.npm` EACCES.
-- **v0.10.0** — Fixed service user handling; avoid chowning `/srv`; run via runuser/su.
-- **v0.9.0** — Hardened ownership scoping under `/srv/*`, avoided touching `/srv` root.
-- **v0.8.0** — Service user home under `/home`, removed sudo assumptions.
-- **v0.7.0** — Fixed `ver` unbound variable and arg parsing nits.
-- **v0.6.0** — Added interactive flow & dry-run draft.
-- **v0.5.0** — Idempotency checks.
-- **v0.4.0** — Added inline documentation and clearer logging.
-- **v0.3.0** — First public bundle; README partial.
-- **v0.2.0** — Added instance directories and basic systemd unit templates.
-- **v0.1.0** — Initial bootstrap skeleton (layout only).
-## scripts/actualctl
-- **v0.22.0** — Doc bump & readability: version header updated; readable heredoc banner.
-- **v0.21.0** — Docs: rebranded to tkl-actual-bootstrap; added GPLv3 licensing blocks.
-- **v0.20.4** — Docs: aligned with v0.20.4; no functional changes.
-- **v0.20.4** — Docs: aligned with v0.20.4; no functional changes.
-- **v0.20.2** — Docs: CHANGELOG reordered newest→oldest; no functional changes.
-- **v0.20.1** — Docs: standardized historical version labels to vXX.YY.ZZ (no functional changes).
-- **v0.20.0** — Docs parity with v0.20; adopted v0.xx scheme (no functional changes).
-- **v0.19.0** — Docs parity; runuser detection fix; help refresh.
-- **v0.18.0** — Generic domain; tracks renamed to production/test/development.
-- **v0.17.0** — Docs-only: changelog backfill.
-- **v0.16.0** — New: `instance rm`, `prune-backups`; parser fix; headers.
-- **v0.15.0** — New: `instance add`, `check`, `env`, `verify` + systemd/nginx generation.
-- **v0.14.0** — No changes.
-- **v0.13.0** — No changes.
-- **v0.12.0** — No changes.
-- **v0.11.0** — All npm runs under service user HOME/cache.
-- **v0.10.0** — Stable helper: manage services; fetch/switch; backup/restore; reset-password; shell; logs/status.
-- **v0.9.0** — Minor fixes; help cleanup.
-- **v0.8.0** — Honor service user env; prep for npm cache isolation.
-- **v0.7.0** — Logging polish, error handling improvements.
-- **v0.6.0** — `reset-password` and `shell` helpers.
-- **v0.5.0** — Safer `switch` (stop → link → start).
-- **v0.4.0** — Help examples improved.
-- **v0.3.0** — Added `backup`/`restore`; help text.
-- **v0.2.0** — Added `fetch` and `switch` (tracking links).
-- **v0.1.0** — Helper draft: start/stop/status/logs for fixed instances.
+## 2) scripts/actualctl — Full History (newest first)
+
+### v0.23.1 — 2025-08-31
+**Fixed**
+- `list`: display only version directories under `/srv/app` (sorted with `sort -V`).
+
+### v0.23.0 — 2025-08-31
+**Added**
+- `instance set-port <NAME> <PORT>` — rewrite `/srv/<NAME>/data/config.json` and restart service.
+- `health [INSTANCE]` — checks Nginx upstream (`/health/upstream`) and backend reachability.
+- `doctor` — full system check: required tools, `nginx -t`, service state, port listening, upstream health.
+
+**Changed**
+- Help text parity with README; examples updated.
+- Dynamic instance discovery (iterate `/srv/*/data`), not just dev/test/prod.
+
+### v0.22.1 — 2025-08-31
+**Changed**
+- Documentation alignment with default Actual version **v25.7.1** (no functional changes).
+
+### v0.22.0 — 2025-08-30
+**Notes from tag**
+- Doc-only bump for scripts (no functional changes).
+
+### v0.21.0 — 2025-08-30
+**Notes from tag**
+- Docs: rebranded to **tkl-actual-bootstrap**; added GPLv3 licensing blocks and **LICENSE**.
+
+---
+
+## 3) scripts/bootstrap.sh — Full History (newest first)
+
+### v0.23.0 — 2025-08-31
+**Changed**
+- Help/UX parity: **no-arg** shows banner + quick usage; `--help` shows full help.
+- Safer Nginx fallback template; includes `/healthz` and `/health/upstream`.
+- Idempotency & safety: never `chown -R /srv`; write files via `install` if changed.
+- Domain handling with `/etc/actual-budget/env` (prompts if missing, or default `example.com` with `-y`).
+- Amended: added `cmp` and `useradd` to `require_cmd` and documented prerequisites.
+
+### v0.22.1 — 2025-08-31
+**Changed**
+- Default Actual Sync Server version set to **v25.7.1**.
+- Systemd units use `./node_modules/.bin/actual-server` in `ExecStart` for stability.
+- Optional `--install-ctl` to install `actualctl` into PATH (with `--ctl-path`).
+
+### v0.22.0 — 2025-08-30
+**From tag**
+- Doc-only bump for scripts (no functional changes).
+
+### v0.21.0 — 2025-08-30
+**From tag**
+- Rebranded to **tkl-actual-bootstrap**; added GPLv3 licensing blocks and **LICENSE**.
+
+---
+
+### Historical notes (pre–v0.21.0)
+- Earlier “Rev” series (Rev 1–19) exist in the repository history and tags; where possible,
+  details were reconstructed from commit/tag messages to maintain continuity with the new
+  semantic versioning (v0.xx.y).
