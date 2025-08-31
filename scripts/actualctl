@@ -1,42 +1,26 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2025 Ken Robinson <ken@turnkeylinux.org>
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-# ------------------------------------------------------------------------------
-# actualctl — Manage Actual Budget multi-instance
-<<<<<<< HEAD
-# Version: v0.21.0
-=======
-# Version: v0.22.0
->>>>>>> alpha
-#
-# What's changed since v0.20.4:
-#   - Docs-only: removed personal references from public docs; no functional changes.
-#   - Docs-only: added Migration from pre–v0.20 and Common port map to top-level README; no functional changes.
-# Full history: see ./CHANGELOG.md (section: scripts/actualctl)
-# Script README: ./docs/README.actualctl.md
-# ------------------------------------------------------------------------------
+# tkl-actual-bootstrap : actualctl
+# Version: v0.22.1
+# Manage Actual Sync Server multi-instance on TurnKey Linux.
+# - Instances: development, test, production
+# - Links:     /srv/app/<instance> -> /srv/app/vX.Y.Z
+# - Data:      /srv/<instance>/data (ACTUAL_DATA_DIR)
+# - Units:     <instance>-budgetapp.service
+# NOTES:
+# * Run as root for commands that change the system (fetch/switch/backup/restore/instance/service).
+# * Idempotent where applicable.
+
 set -Eeuo pipefail
 
-<<<<<<< HEAD
-=======
+#######################################
+# Banner
+#######################################
 banner() {
   cat <<'BANNER'
 ┌──────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : actualctl  v0.22.0                            │
-│ Manage/Bootstrap Actual Sync Server on Turnkey Linux (GPL-3.0-or-later) │
+│ tkl-actual-bootstrap : actualctl  v0.22.1                            │
+│ Manage Actual Sync Server multi-instance (GPL-3.0-or-later)          │
 │ Author: Ken Robinson <ken@turnkeylinux.org>                          │
 │ Source: https://github.com/DocCyblade/tkl-actual-bootstrap           │
 │ Hint:   actualctl --help                                             │
@@ -44,446 +28,393 @@ banner() {
 BANNER
 }
 
+#######################################
+# Usage (quick) and Help (full)
+#######################################
+usage_quick() {
+  cat <<'HELP'
+Usage: actualctl <command> [args]
+Hint : actualctl --help    # for full documentation and examples
+HELP
+}
 
->>>>>>> alpha
-SRV="/srv"
-APPS="$SRV/app"
-BACKUPS="$SRV/backups"
-SERVICE_USER="budget-server"
-SERVICE_HOME="/home/$SERVICE_USER"
-NPM_CACHE="$SERVICE_HOME/.npm"
-TLS_CERT="${CERT_CRT:-/etc/ssl/private/cert.pem}"
-TLS_KEY="${CERT_KEY:-/etc/ssl/private/cert.key}"
+print_usage() {
+  cat <<'HELP'
+Usage: actualctl <command> [args]
 
-# Optional config file with defaults
-AB_ENV="/etc/actual-budget/env"
-if [[ -f "$AB_ENV" ]]; then
-  # shellcheck disable=SC1090
-  . "$AB_ENV"
+Commands (high level):
+  help                          Show this help and exit
+  list                          Show instances, symlink targets, and versions
+  check                         Run basic health checks
+  env [INSTANCE]               Show environment & paths (all or one)
+
+Version & app mgmt:
+  fetch <vX.Y.Z>                Install @actual-app/sync-server@<ver> into /srv/app/<ver>
+  switch <INSTANCE> <vX.Y.Z>    Point /srv/app/<INSTANCE> -> /srv/app/<ver>, restart service
+  verify <vX.Y.Z>               Install to a temp dir and run a smoke check, then remove
+
+Backups:
+  backup <INSTANCE> [note]      Tar user-data to /srv/backups/<instance>-<ts>[-note].tgz
+  restore <INSTANCE> <tgz>      Stop service, backup current, restore tgz, chown, start
+  prune-backups [--keep N]      Keep N most-recent per instance (default: 7)
+
+Instances:
+  instance add <NAME> <ver|development|test|production> [--from SRC]
+                                Create /srv/<NAME>/data (optionally copy from SRC),
+                                create unit, link /srv/app/<NAME> -> target, start
+  instance rm  <NAME> [--purge] Stop/disable unit, remove unit, (optional) delete /srv/<NAME>
+                                and nginx vhost symlinks
+
+Service wrappers:
+  service <INSTANCE> start|stop|restart|status
+  logs    <INSTANCE> [lines]    Tail journal for the instance unit
+
+Examples:
+  actualctl list
+  actualctl fetch v25.8.0
+  actualctl switch production v25.8.0
+  actualctl backup production "pre-upgrade"
+  actualctl restore production /srv/backups/production-20250101-120000-pre-upgrade.tgz
+  actualctl instance add staging v25.8.0 --from production
+  actualctl prune-backups --keep 10
+HELP
+}
+
+#######################################
+# Early arg guard: no-args (quick) vs --help (full)
+#######################################
+if [[ $# -eq 0 ]]; then
+  banner
+  usage_quick
+  exit 0
 fi
-DEFAULT_DOMAIN="${BUDGET_DOMAIN:-example.com}"
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+  banner
+  print_usage
+  exit 0
+fi
 
-need_root() { if [[ $EUID -ne 0 ]]; then echo "This command must be run as root." >&2; exit 1; fi; }
+#######################################
+# Config
+#######################################
+APP_USER="budget-server"
+APP_GROUP="budget-server"
+BASE_APP="/srv/app"
+BACKUPS="/srv/backups"
+INSTANCES=(development test production)
+declare -A PORTS=( ["development"]=5006 ["test"]=5000 ["production"]=5001 )
 
-as_budget_user_env() {
-  local cmd="$*"
+# helpers
+log()  { printf '[INFO] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*" >&2; }
+err()  { printf '[ERR ] %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
+as_user() {
   if command -v runuser >/dev/null 2>&1; then
-    runuser -u "$SERVICE_USER" -- env HOME="$SERVICE_HOME" NPM_CONFIG_CACHE="$NPM_CACHE" PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" bash -lc "$cmd"
+    runuser -u "$APP_USER" -- bash -lc "$*"
   else
-    su -s /bin/bash - "$SERVICE_USER" -c "HOME='$SERVICE_HOME' NPM_CONFIG_CACHE='$NPM_CACHE' PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' bash -lc \"$cmd\""
+    su -s /bin/bash - "$APP_USER" -c "$*"
   fi
 }
 
-usage() {
-  cat <<'USAGE'
-actualctl — manage Actual Budget multi-instance
+require_root() { [[ $(id -u) -eq 0 ]] || die "Run as root (no sudo)."; }
 
-USAGE:
-  actualctl <INSTANCE> <logs|status|start|stop|restart>
-  actualctl reset-password <INSTANCE>
-  actualctl shell <INSTANCE>
-  actualctl fetch <VERSION>
-  actualctl switch <production|test|development> <VERSION>
-  actualctl backup <INSTANCE>
-  actualctl restore <INSTANCE> <TARBALL>
-  actualctl env <INSTANCE>
-  actualctl check
-  actualctl instance add <NAME> --link <production|test|development> [--fqdn HOST] [--port N] [--copy-from SRC] [--no-nginx] [--yes]
-  actualctl instance rm  <NAME> [--keep-data] [--yes]
-  actualctl prune-backups <INSTANCE> --keep N
-  actualctl verify <VERSION> [--keep]
-
-See ./docs/README.actualctl.md for detailed docs and examples.
-USAGE
+json_get() { # json_get <file> <key>
+  awk -v k="$2" -F': *' '/"'"$2"'"/ {gsub(/[",]/,"",$2); print $2; exit}' "$1" 2>/dev/null || true
 }
 
-normalize_version(){ local v="${1:-}"; [[ -z "$v" ]] && { echo "Missing version" >&2; exit 2; }; [[ "$v" != v* ]] && v="v${v}"; echo "$v"; }
-svc_of(){ case "$1" in development) echo development-budgetapp.service;; test) echo test-budgetapp.service;; production) echo production-budgetapp.service;; *) echo "$1-budgetapp.service";; esac; }
-link_of_instance(){ case "$1" in development) echo "$APPS/development";; test) echo "$APPS/test";; production|*) echo "$APPS/production";; esac; }
-data_dir_of(){ echo "$SRV/$1/data"; }
-port_from_config(){ awk -F: '/"port"\s*:/ {gsub(/[ ,]/,"",$2); print $2}' "$1" 2>/dev/null || true; }
-
-list_used_ports() {
-  for cfg in "$SRV"/*/data/config.json; do
-    [[ -f "$cfg" ]] || continue
-    p="$(port_from_config "$cfg")"
-    [[ -n "$p" ]] && echo "$p"
-  done | sort -n | uniq
-}
-
-choose_port() {
-  local requested="${1:-}"
-  if [[ -n "$requested" ]]; then echo "$requested"; return; fi
-  local used=$(list_used_ports || true)
-  local p=5000
-  while :; do
-    if echo "$used" | grep -qx "$p"; then p=$((p+1)); continue; fi
-    [[ "$p" -eq 5006 ]] && { p=$((p+1)); continue; }  # reserve for development unless requested
-    echo "$p"; return
+#######################################
+# Introspection
+#######################################
+cmd_list() {
+  printf "%-12s %-28s %s\n" "INSTANCE" "LINK->VERSION" "SERVICE"
+  for inst in "${INSTANCES[@]}"; do
+    local link="${BASE_APP}/${inst}"
+    local target="(none)"
+    if [[ -L "$link" ]]; then
+      target="$(basename "$(readlink -f "$link")")"
+    fi
+    local svc="${inst}-budgetapp.service"
+    local state
+    state="$(systemctl is-active "$svc" 2>/dev/null || echo inactive)"
+    printf "%-12s %-28s %s\n" "$inst" "${target#${BASE_APP}/}" "$state"
   done
+  echo
+  echo "Available versions under ${BASE_APP}:"
+  (ls -1 "${BASE_APP}"/v* 2>/dev/null || true) | sed "s#^${BASE_APP}/##" | sort -V
 }
 
-write_unit() {
-  local inst="$1" link="$2"
-  local unit="/etc/systemd/system/${inst}-budgetapp.service"
-  cat > "$unit" <<UNIT
+cmd_check() {
+  require_root
+  local ok=1
+  for c in node npm systemctl nginx; do
+    if ! command -v "$c" >/dev/null 2>&1; then err "Missing: $c"; ok=0; fi
+  done
+  for inst in "${INSTANCES[@]}"; do
+    local dat="/srv/${inst}/data"
+    [[ -d "$dat" ]] || { err "Missing data dir: $dat"; ok=0; }
+    local svc="${inst}-budgetapp.service"
+    systemctl status "$svc" >/dev/null 2>&1 || warn "Service not active: $svc"
+  done
+  [[ $ok -eq 1 ]] && log "check: OK" || die "check: FAIL"
+}
+
+cmd_env() {
+  local inst="${1:-}"
+  if [[ -z "$inst" ]]; then
+    for i in "${INSTANCES[@]}"; do
+      cmd_env "$i"
+      echo
+    done
+    return 0
+  fi
+  local dat="/srv/${inst}/data"
+  local cfg="${dat}/config.json"
+  local link="${BASE_APP}/${inst}"
+  local ver="(none)"
+  if [[ -L "$link" ]]; then
+    ver="$(basename "$(readlink -f "$link")")"
+  fi
+  local port host
+  port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"
+  printf "%s:\n  ACTUAL_DATA_DIR=%s\n  config=%s (port=%s host=%s)\n  app_link=%s -> %s\n" \
+    "$inst" "$dat" "$cfg" "${port:-?}" "${host:-?}" "$link" "$ver"
+}
+
+#######################################
+# Version management
+#######################################
+cmd_fetch() {
+  require_root
+  local ver="${1:-}"
+  [[ -n "$ver" ]] || die "Usage: actualctl fetch <vX.Y.Z>"
+  local dest="${BASE_APP}/${ver}"
+  log "fetch: installing ${ver} into ${dest}"
+  mkdir -p "$dest"; chown -R "$APP_USER:$APP_GROUP" "$dest"
+  if [[ -f "${dest}/node_modules/@actual-app/sync-server/package.json" ]]; then
+    log "already present: ${ver}"
+    return 0
+  fi
+  as_user "cd \"$dest\" && { test -f package.json || npm init -y; } && npm config set fund false && npm config set audit false && npm install \"@actual-app/sync-server@${ver}\""
+  log "fetch: done"
+}
+
+cmd_switch() {
+  require_root
+  local inst="${1:-}"
+  local ver="${2:-}"
+  [[ -n "$inst" && -n "$ver" ]] || die "Usage: actualctl switch <INSTANCE> <vX.Y.Z>"
+  local link="${BASE_APP}/${inst}"
+  local target="${BASE_APP}/${ver}"
+  [[ -d "$target" ]] || die "Version not installed: $ver"
+  ln -sfn "$target" "$link"
+  systemctl restart "${inst}-budgetapp.service"
+  log "switch: $inst -> $ver"
+}
+
+cmd_verify() {
+  require_root
+  local ver="${1:-}"
+  [[ -n "$ver" ]] || die "Usage: actualctl verify <vX.Y.Z>"
+  local tmp="${BASE_APP}/.verify-${ver}.$(date +%s)"
+  mkdir -p "$tmp"; chown -R "$APP_USER:$APP_GROUP" "$tmp"
+  log "verify: installing to temp $tmp"
+  as_user "cd \"$tmp\" && npm init -y >/dev/null 2>&1 && npm config set fund false && npm config set audit false && npm install \"@actual-app/sync-server@${ver}\""
+  if [[ -d "$tmp/node_modules/@actual-app/sync-server" ]]; then
+    log "verify: OK (module present)"
+  else
+    rm -rf "$tmp"
+    die "verify: install failed"
+  fi
+  rm -rf "$tmp"
+  log "verify: cleaned"
+}
+
+#######################################
+# Backup / Restore
+#######################################
+cmd_backup() {
+  require_root
+  local inst="${1:-}"
+  local note="${2:-}"
+  [[ -n "$inst" ]] || die "Usage: actualctl backup <INSTANCE> [note]"
+  local dat="/srv/${inst}/data"
+  [[ -d "$dat" ]] || die "Missing: $dat"
+  mkdir -p "$BACKUPS"
+  local ts
+  ts="$(date +%Y%m%d-%H%M%S)"
+  local base="${inst}-${ts}"
+  if [[ -n "$note" ]]; then
+    base="${base}-${note//[^A-Za-z0-9._-]/_}"
+  fi
+  local out="${BACKUPS}/${base}.tgz"
+  tar -C "$dat" -czf "$out" .
+  log "backup: $out"
+  echo "$out"
+}
+
+cmd_restore() {
+  require_root
+  local inst="${1:-}"
+  local tgz="${2:-}"
+  [[ -n "$inst" && -n "$tgz" ]] || die "Usage: actualctl restore <INSTANCE> <archive.tgz>"
+  local dat="/srv/${inst}/data"
+  [[ -d "$dat" ]] || die "Missing: $dat"
+  systemctl stop "${inst}-budgetapp.service" || true
+  cmd_backup "$inst" pre-restore >/dev/null || true
+  rm -rf "${dat}/"* 2>/dev/null || true
+  tar -C "$dat" -xzf "$tgz"
+  chown -R "$APP_USER:$APP_GROUP" "/srv/${inst}"
+  systemctl start "${inst}-budgetapp.service"
+  log "restore: done for $inst"
+}
+
+cmd_prune_backups() {
+  require_root
+  local keep=7
+  if [[ "${1:-}" == "--keep" ]]; then
+    keep="${2:-7}"
+  fi
+  mkdir -p "$BACKUPS"
+  for inst in "${INSTANCES[@]}"; do
+    mapfile -t files < <(ls -1t "$BACKUPS"/${inst}-*.tgz 2>/dev/null || true)
+    if (( ${#files[@]} > keep )); then
+      for f in "${files[@]:$keep}"; do
+        rm -f "$f"; log "pruned: $f"
+      done
+    fi
+  done
+  log "prune-backups: keep=${keep}"
+}
+
+#######################################
+# Instance management
+#######################################
+_unit_text() {
+  local inst="$1"
+  local linkdir="${BASE_APP}/${inst}"
+  local datadir="/srv/${inst}/data"
+  cat <<UNIT
 [Unit]
-Description=Actual Budget Sync Server (${inst})
-After=network-online.target
-Wants=network-online.target
+Description=Actual Sync Server (${inst})
+After=network.target
 
 [Service]
 Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_USER}
-WorkingDirectory=/srv/app/${link}
-Environment=PATH=/srv/app/${link}/node_modules/.bin:/usr/local/bin:/usr/bin
+User=${APP_USER}
+Group=${APP_GROUP}
+WorkingDirectory=${linkdir}
 Environment=NODE_ENV=production
-Environment=ACTUAL_DATA_DIR=/srv/${inst}/data
-ExecStart=/srv/app/${link}/node_modules/.bin/actual-server
+Environment=ACTUAL_DATA_DIR=${datadir}
+ExecStart=/usr/bin/env bash -lc './node_modules/.bin/actual-server'
 Restart=on-failure
-RestartSec=5s
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectHome=true
-ReadWritePaths=/srv/${inst}/data
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-  echo "$unit"
-}
-
-write_nginx() {
-  local inst="$1" host="$2" port="$3"
-  local file="/etc/nginx/sites-available/${inst}-budgetapp.conf"
-  cat > "$file" <<NGINX
-# ${host} → 127.0.0.1:${port}
-server {
-  listen 80;
-  listen [::]:80;
-  server_name ${host};
-  return 301 https://\$host\$request_uri;
-}
-
-server {
-  listen 443 ssl http2;
-  listen [::]:443 ssl http2;
-  server_name ${host};
-
-  ssl_certificate     ${TLS_CERT};
-  ssl_certificate_key ${TLS_KEY};
-
-  client_max_body_size 50M;
-
-  location = /healthz {
-    access_log off;
-    add_header Content-Type text/plain;
-    return 200 'ok';
-  }
-
-  location = /health/upstream {
-    access_log off;
-    proxy_http_version 1.1;
-    proxy_set_header Host              \$host;
-    proxy_set_header X-Real-IP         \$remote_addr;
-    proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_connect_timeout 2s;
-    proxy_read_timeout 2s;
-    proxy_send_timeout 2s;
-    proxy_pass http://127.0.0.1:${port}/;
-  }
-
-  location / {
-    proxy_http_version 1.1;
-    proxy_set_header Host              \$host;
-    proxy_set_header X-Real-IP         \$remote_addr;
-    proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header Upgrade           \$http_upgrade;
-    proxy_set_header Connection        "upgrade";
-    proxy_pass http://127.0.0.1:${port};
-  }
-}
-NGINX
-  echo "$file"
 }
 
 cmd_instance_add() {
-  need_root
-  local name="" link="" fqdn="" port="" copy="" yes=0 no_nginx=0
-  while (($#)); do
-    case "$1" in
-      --link) link="$2"; shift 2;;
-      --fqdn) fqdn="$2"; shift 2;;
-      --port) port="$2"; shift 2;;
-      --copy-from) copy="$2"; shift 2;;
-      --no-nginx) no_nginx=1; shift ;;
-      --yes|-y) yes=1; shift ;;
-      *) if [[ -z "$name" ]]; then name="$1"; shift; else echo "Unknown arg: $1"; exit 2; fi ;;
-    esac
-  done
-  [[ -n "$name" ]] || { echo "Usage: actualctl instance add <NAME> --link <production|test|development> ..." >&2; exit 2; }
-  [[ -n "$link" ]] || { echo "--link is required (production|test|development)" >&2; exit 2; }
-  [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "Bad instance name: $name" >&2; exit 2; }
-  [[ ! -d "$SRV/$name" ]] || { echo "Instance exists: $name" >&2; exit 2; }
-
-  port="$(choose_port "$port")"
-  [[ -n "$fqdn" ]] || fqdn="${name}-budgetapp.${DEFAULT_DOMAIN}"
-
-  echo "About to create instance '$name'"
-  echo "  link:  $link"
-  echo "  fqdn:  $fqdn"
-  echo "  port:  $port"
-  echo "  copy:  ${copy:-<none>}"
-  (( yes == 1 )) || { read -r -p "Proceed? (y/N) " ans; [[ "$ans" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }; }
-
-  mkdir -p "$SRV/$name/data"
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$SRV/$name"
-
-  if [[ -n "$copy" ]]; then
-    [[ -d "$SRV/$copy/data" ]] || { echo "Source instance not found: $copy" >&2; exit 2; }
-    if command -v rsync >/dev/null 2>&1; then
-      rsync -a "$SRV/$copy/data/" "$SRV/$name/data/"
-    else
-      (cd "$SRV/$copy/data" && tar -cpf - .) | (cd "$SRV/$name/data" && tar -xpf -)
-    fi
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$SRV/$name"
+  require_root
+  local name="${1:-}"
+  local target="${2:-}"
+  local fromInst=""
+  [[ -n "$name" && -n "$target" ]] || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC]"
+  shift 2
+  if [[ "${1:-}" == "--from" ]]; then
+    fromInst="${2:-}"; shift 2
   fi
 
-  cat > "$SRV/$name/data/config.json" <<CFG
-{ "port": ${port}, "hostname": "127.0.0.1", "trustedProxies": ["127.0.0.1/32", "::1/128"] }
-CFG
-  chown "$SERVICE_USER:$SERVICE_USER" "$SRV/$name/data/config.json"
+  local dat="/srv/${name}/data"
+  mkdir -p "$dat"
+  if [[ -n "$fromInst" ]]; then
+    local src="/srv/${fromInst}/data"
+    [[ -d "$src" ]] || die "Source data missing: $src"
+    rsync -a --delete "$src/." "$dat/"
+  fi
+  chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
 
-  unit_path="$(write_unit "$name" "$link")"
+  local link="${BASE_APP}/${name}"
+  local tgt="${BASE_APP}/${target}"
+  if [[ ! -d "$tgt" ]]; then
+    if [[ -L "${BASE_APP}/${target}" ]]; then
+      tgt="$(readlink -f "${BASE_APP}/${target}")"
+    else
+      die "Target version/instance not installed: $target"
+    fi
+  fi
+  ln -sfn "$tgt" "$link"
+
+  local unit="/etc/systemd/system/${name}-budgetapp.service"
+  _unit_text "$name" > "$unit"
   systemctl daemon-reload
   systemctl enable --now "${name}-budgetapp.service"
-
-  if (( no_nginx == 0 )); then
-    site_path="$(write_nginx "$name" "$fqdn" "$port")"
-    ln -sfn "$site_path" "/etc/nginx/sites-enabled/${name}-budgetapp.conf"
-    nginx -t
-    systemctl reload nginx || systemctl restart nginx
-  fi
-
-  echo "Instance '$name' created."
+  log "instance add: $name -> $(basename "$tgt")"
 }
 
 cmd_instance_rm() {
-  need_root
-  local name="" keep=0 yes=0
-  while (($#)); do
-    case "$1" in
-      --keep-data) keep=1; shift ;;
-      --yes|-y) yes=1; shift ;;
-      *) if [[ -z "$name" ]]; then name="$1"; shift; else echo "Unknown arg: $1"; exit 2; fi ;;
-    esac
-  done
-  [[ -n "$name" ]] || { echo "Usage: actualctl instance rm <NAME> [--keep-data] [--yes]"; exit 2; }
-  [[ -d "$SRV/$name" ]] || { echo "Instance not found: $name"; exit 2; }
-  echo "About to remove instance '$name'"
-  echo "  keep data: $keep  (/srv/$name)"
-  (( yes == 1 )) || { read -r -p "Proceed? (y/N) " ans; [[ "$ans" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }; }
-
-  svc="${name}-budgetapp.service"
-  systemctl stop "$svc" 2>/dev/null || true
-  systemctl disable "$svc" 2>/dev/null || true
-  rm -f "/etc/systemd/system/$svc"
+  require_root
+  local name="${1:-}"
+  local purge=0
+  [[ -n "$name" ]] || die "Usage: actualctl instance rm <NAME> [--purge]"
+  if [[ "${2:-}" == "--purge" ]]; then
+    purge=1
+  fi
+  systemctl disable --now "${name}-budgetapp.service" || true
+  rm -f "/etc/systemd/system/${name}-budgetapp.service"
   systemctl daemon-reload
-
-  rm -f "/etc/nginx/sites-enabled/${name}-budgetapp.conf"
-  rm -f "/etc/nginx/sites-available/${name}-budgetapp.conf"
-  nginx -t && systemctl reload nginx || true
-
-  if (( keep == 0 )); then
-    rm -rf "$SRV/$name"
-    echo "Deleted /srv/$name"
-  else
-    echo "Left /srv/$name intact"
+  rm -f "${BASE_APP}/${name}"
+  if (( purge )); then
+    rm -rf "/srv/${name}"
+    log "purged /srv/${name}"
   fi
-
-  echo "Instance '$name' removed."
+  log "instance rm: $name"
 }
 
-cmd_prune_backups() {
-  need_root
-  local inst="" keep=""
-  while (($#)); do
-    case "$1" in
-      --keep) keep="$2"; shift 2 ;;
-      *) if [[ -z "$inst" ]]; then inst="$1"; shift; else echo "Unknown arg: $1"; exit 2; fi ;;
-    esac
-  done
-  [[ -n "$inst" ]] || { echo "Usage: actualctl prune-backups <INSTANCE> --keep N"; exit 2; }
-  [[ -n "$keep" ]] || keep=7
-  mkdir -p "$BACKUPS"
-  shopt -s nullglob
-  mapfile -t files < <(ls -1 "$BACKUPS/${inst}-"*.tgz 2>/dev/null | sort -r || true)
-  shopt -u nullglob
-  total="${#files[@]}"
-  (( total <= keep )) && { echo "Nothing to prune. Total=$total, keep=$keep"; return 0; }
-  echo "Pruning backups for $inst: total=$total keep=$keep"
-  for ((i=keep; i<total; i++)); do
-    echo "Removing ${files[$i]}"; rm -f "${files[$i]}"
-  done
-  echo "Done."
+#######################################
+# Service wrappers
+#######################################
+cmd_service() {
+  require_root
+  local inst="${1:-}"
+  local op="${2:-}"
+  [[ -n "$inst" && -n "$op" ]] || die "Usage: actualctl service <INSTANCE> start|stop|restart|status"
+  systemctl "$op" "${inst}-budgetapp.service"
+}
+cmd_logs() {
+  local inst="${1:-}"
+  local lines="${2:-200}"
+  [[ -n "$inst" ]] || die "Usage: actualctl logs <INSTANCE> [lines]"
+  journalctl -u "${inst}-budgetapp.service" -n "$lines" --no-pager
 }
 
-cmd_env() {
-  local inst="${1:-}"; [[ -n "$inst" ]] || { echo "Usage: actualctl env <INSTANCE>"; exit 2; }
-  local data="$(data_dir_of "$inst")"
-  local link_dir="$(link_of_instance "$inst")"
-  local bin="$link_dir/node_modules/.bin/actual-server"
-  local cfg="$data/config.json"
-  local port="$(port_from_config "$cfg")"
-  echo "INSTANCE=$inst"
-  echo "DATA_DIR=$data"
-  echo "LINK_DIR=$link_dir"
-  echo "BIN=$bin"
-  echo "CONFIG=$cfg"
-  echo "PORT=${port:-<unknown>}"
-  if [[ -L "$link_dir" ]]; then echo "LINK_TARGET=$(readlink -f "$link_dir")"; fi
-}
-
-cmd_check() {
-  need_root
-  echo "== BASIC =="
-  for c in node npm systemctl nginx; do command -v "$c" >/dev/null 2>&1 && echo "ok: $c" || echo "MISSING: $c"; done
-  id "$SERVICE_USER" >/dev/null 2>&1 && echo "ok: user $SERVICE_USER" || echo "MISSING: user $SERVICE_USER"
-  [[ -d "$APPS" ]] && echo "ok: $APPS exists" || echo "MISSING: $APPS"
-  for link in production development test; do
-    [[ -L "$APPS/$link" ]] && echo "ok: link $link -> $(readlink -f "$APPS/$link")" || echo "MISSING: $APPS/$link"
-  done
-
-  echo ""
-  echo "== SERVICES =="
-  for unit in /etc/systemd/system/*-budgetapp.service; do
-    [[ -f "$unit" ]] || continue
-    svc="$(basename "$unit")"
-    state="$(systemctl is-active "$svc" 2>/dev/null || true)"
-    echo "$svc: ${state:-unknown}"
-  done
-
-  echo ""
-  echo "== PORTS =="
-  for cfg in "$SRV"/*/data/config.json; do
-    [[ -f "$cfg" ]] || continue
-    inst="$(echo "$cfg" | awk -F'/' '{print $(NF-2)}')"
-    port="$(port_from_config "$cfg")"
-    echo -n "$inst: $port "
-    if command -v ss >/dev/null 2>&1; then
-      ss -ltn "( sport = :$port )" | tail -n +2 | wc -l | awk '{print ($1>0)?"LISTENING":"(not bound)"}'
-    else
-      echo ""
-    fi
-  done
-
-  echo ""
-  echo "== NGINX =="
-  [[ -f "$TLS_CERT" && -f "$TLS_KEY" ]] && echo "ok: TLS files present" || echo "WARN: TLS files missing"
-  nginx -t || true
-}
-
-cmd_verify() {
-  need_root
-  local version_in="${1:-}"; [[ -n "$version_in" ]] || { echo "Usage: actualctl verify <VERSION> [--keep]"; exit 2; }
-  shift
-  local keep=0
-  [[ "${1:-}" == "--keep" ]] && keep=1
-  local v="$(normalize_version "$version_in")"
-  local tempdir="$APPS/_verify/${v}"
-  mkdir -p "$tempdir"; chown "$SERVICE_USER:$SERVICE_USER" "$tempdir"
-  echo "Installing @actual-app/sync-server@${v#v} into $tempdir"
-  as_budget_user_env "cd '$tempdir' && npm init -y && npm install --omit=dev --no-audit --no-fund @actual-app/sync-server@${v#v}"
-  echo "Running smoke test (--version)"
-  as_budget_user_env "cd '$tempdir' && './node_modules/.bin/actual-server' --version || true"
-  if (( keep == 0 )); then
-    echo "Cleaning $tempdir"
-    rm -rf "$tempdir"
-  else
-    echo "Kept at $tempdir"
-  fi
-}
-
-# ---------- entry ----------
-if [[ "${1:-}" == "" || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
-
+#######################################
+# Dispatch
+#######################################
 case "${1:-}" in
-  logs|status|start|stop|restart)
-    cmd="$1"; shift
-    instance="${1:-}"; [[ -n "$instance" ]] || { usage; exit 1; }
-    service="$(svc_of "$instance")"
-    [[ "$cmd" == "logs" ]] && exec journalctl -u "$service" -f -n 200
-    exec systemctl "$cmd" "$service"
-    ;;
-  reset-password)
-    shift; instance="${1:-}"; [[ -n "$instance" ]] || { usage; exit 1; }
-    data_dir="$(data_dir_of "$instance")"; link_dir="$(link_of_instance "$instance")"; bin="$link_dir/node_modules/.bin/actual-server"
-    exec env ACTUAL_DATA_DIR="$data_dir" as_budget_user_env "'$bin' --reset-password"
-    ;;
-  shell)
-    shift; instance="${1:-}"; [[ -n "$instance" ]] || { usage; exit 1; }
-    link_dir="$(link_of_instance "$instance")"
-    exec as_budget_user_env "cd '$link_dir' && exec bash"
-    ;;
-  fetch)
-    shift; version_in="${1:-}"; [[ -n "$version_in" ]] || { usage; exit 1; }
-    v="$(normalize_version "$version_in")"; target="$APPS/$v"
-    if [[ -d "$target" ]]; then echo "Version already present: $target"; exit 0; fi
-    mkdir -p "$target"; chown "$SERVICE_USER:$SERVICE_USER" "$target"
-    echo "Installing @actual-app/sync-server@$v into $target"
-    as_budget_user_env "cd '$target' && npm init -y && npm install --omit=dev --no-audit --no-fund @actual-app/sync-server@${v#v}"
-    echo "Done."; exit 0
-    ;;
-  backup)
-    shift; instance="${1:-}"; [[ -n "$instance" ]] || { usage; exit 1; }
-    mkdir -p "$BACKUPS"
-    ts="$(date +%Y%m%d-%H%M%S)"; out="$BACKUPS/${instance}-${ts}.tgz"
-    echo "Creating backup: $out"; tar -C "$SRV/$instance" -czf "$out" data; chown "$SERVICE_USER:$SERVICE_USER" "$out"; echo "$out"; exit 0
-    ;;
-  restore)
-    shift; instance="${1:-}"; tarball="${2:-}"; [[ -n "$instance" && -n "$tarball" ]] || { usage; exit 1; }
-    [[ -f "$tarball" ]] || { echo "Tarball not found: $tarball" >&2; exit 2; }
-    service="$(svc_of "$instance")"; echo "Stopping $service..."; systemctl stop "$service"
-    echo "Backing up current before restore..."; current_backup="$( "$0" backup "$instance" | tail -n1 )"; echo "Backup at: $current_backup"
-    echo "Restoring $tarball ..."; tar -C "$SRV/$instance" -xzf "$tarball"; chown -R "$SERVICE_USER:$SERVICE_USER" "$SRV/$instance"
-    echo "Starting $service..."; systemctl start "$service"; systemctl --no-pager status "$service" ; exit 0
-    ;;
-  env)
-    shift; cmd_env "${1:-}"
-    ;;
-  check)
-    shift; cmd_check
-    ;;
-  instance)
-    shift; sub="${1:-}"; shift || true
-    case "$sub" in
-      add) cmd_instance_add "$@" ;;
-      rm)  cmd_instance_rm "$@"  ;;
-      *) echo "Unknown subcommand: instance $sub"; exit 2 ;;
-    esac
-    ;;
-  prune-backups)
-    shift; cmd_prune_backups "$@"
-    ;;
-  verify)
-    shift; cmd_verify "$@"
-    ;;
-  switch)
-    shift; linkname="${1:-}"; version_in="${2:-}"; [[ -n "$linkname" && -n "$version_in" ]] || { usage; exit 1; }
-    v="$(normalize_version "$version_in")"; target="$APPS/$v"; [[ -d "$target" ]] || { echo "Version dir does not exist: $target (run: actualctl fetch $v)"; exit 3; }
-    case "$linkname" in production) services=("production-budgetapp.service");;
-      development) services=("development-budgetapp.service");;
-      test) services=("test-budgetapp.service");;
-      *) echo "Unknown link name: $linkname (use production|development|test)"; exit 4;; esac
-    echo "Stopping services: ${services[*]}"; systemctl stop "${services[@]}"
-    echo "Updating symlink: /srv/app/$linkname -> $target"; ln -sfn "$target" "$APPS/$linkname"
-    echo "Starting services: ${services[*]}"; systemctl start "${services[@]}"; systemctl --no-pager status "${services[@]}"; exit 0
-    ;;
-  *)
-    usage; exit 1
-    ;;
+  list)              shift; cmd_list "$@";;
+  check)             shift; cmd_check "$@";;
+  env)               shift; cmd_env "$@";;
+
+  fetch)             shift; cmd_fetch "$@";;
+  switch)            shift; cmd_switch "$@";;
+  verify)            shift; cmd_verify "$@";;
+
+  backup)            shift; cmd_backup "$@";;
+  restore)           shift; cmd_restore "$@";;
+  prune-backups)     shift; cmd_prune_backups "$@";;
+
+  instance)          shift;
+                     case "${1:-}" in
+                       add) shift; cmd_instance_add "$@";;
+                       rm)  shift; cmd_instance_rm "$@";;
+                       *)   err "Unknown: instance ${1:-}"; usage_quick; exit 2;;
+                     esac
+                     ;;
+
+  service)           shift; cmd_service "$@";;
+  logs)              shift; cmd_logs "$@";;
+
+  *)                 err "Unknown command: ${1:-}"; usage_quick; exit 2;;
 esac

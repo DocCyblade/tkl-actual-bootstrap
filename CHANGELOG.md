@@ -10,10 +10,7 @@ v10+ reflects our formalized bundles. Each script also includes a brief delta
 in the header for quick reference.
 
 ## scripts/bootstrap.sh
-<<<<<<< HEAD
-=======
 - **v0.22.0** — Doc bump & readability: version header updated; readable heredoc banner; help on no-args; nginx templating already present.
->>>>>>> alpha
 - **v0.21.0** — Docs: rebranded to tkl-actual-bootstrap; added GPLv3 licensing blocks and LICENSE.
 - **v0.20.4** — Docs: removed personal references; no functional changes.
 - **v0.20.4** — Docs: added Migration from pre–v0.20 and Common port map to README; no functional changes.
@@ -40,10 +37,7 @@ in the header for quick reference.
 - **v0.2.0** — Added instance directories and basic systemd unit templates.
 - **v0.1.0** — Initial bootstrap skeleton (layout only).
 ## scripts/actualctl
-<<<<<<< HEAD
-=======
 - **v0.22.0** — Doc bump & readability: version header updated; readable heredoc banner.
->>>>>>> alpha
 - **v0.21.0** — Docs: rebranded to tkl-actual-bootstrap; added GPLv3 licensing blocks.
 - **v0.20.4** — Docs: aligned with v0.20.4; no functional changes.
 - **v0.20.4** — Docs: aligned with v0.20.4; no functional changes.

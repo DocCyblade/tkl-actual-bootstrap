@@ -1,13 +1,9 @@
-<<<<<<< HEAD
-# tkl-actual-bootstrap (v0.21.0)
-=======
 # tkl-actual-bootstrap (v0.22.0)
 
 ## Changes in v0.22.0
 - Version bump to v0.22.0.
 - Formalizes fixes for Issues #1–#4 (executable bits, readable banners, bootstrap help on no-args, Nginx templating).
 - Script headers updated to v0.22.0. Other documentation preserved from v0.21.0.
->>>>>>> alpha
 
 **Bootstrap for running Actual Sync Server on Turnkey Linux.**
 
