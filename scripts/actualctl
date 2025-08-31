@@ -16,7 +16,11 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # ------------------------------------------------------------------------------
 # actualctl — Manage Actual Budget multi-instance
+<<<<<<< HEAD
 # Version: v0.21.0
+=======
+# Version: v0.22.0
+>>>>>>> alpha
 #
 # What's changed since v0.20.4:
 #   - Docs-only: removed personal references from public docs; no functional changes.
@@ -26,6 +30,22 @@
 # ------------------------------------------------------------------------------
 set -Eeuo pipefail
 
+<<<<<<< HEAD
+=======
+banner() {
+  cat <<'BANNER'
+┌──────────────────────────────────────────────────────────────────────┐
+│ tkl-actual-bootstrap : actualctl  v0.22.0                            │
+│ Manage/Bootstrap Actual Sync Server on Turnkey Linux (GPL-3.0-or-later) │
+│ Author: Ken Robinson <ken@turnkeylinux.org>                          │
+│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap           │
+│ Hint:   actualctl --help                                             │
+└──────────────────────────────────────────────────────────────────────┘
+BANNER
+}
+
+
+>>>>>>> alpha
 SRV="/srv"
 APPS="$SRV/app"
 BACKUPS="$SRV/backups"

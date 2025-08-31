@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # bootstrap.sh — Documentation (v0.21.0)
+=======
+# bootstrap.sh — Documentation (v0.22.0)
+>>>>>>> alpha
 
 **Project:** tkl-actual-bootstrap  
 **Author:** Ken Robinson (<ken@turnkeylinux.org>)  

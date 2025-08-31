@@ -16,7 +16,11 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # ------------------------------------------------------------------------------
 # bootstrap.sh — One-shot, idempotent installer for Actual Budget multi-instance
+<<<<<<< HEAD
 # Version: v0.21.0
+=======
+# Version: v0.22.0
+>>>>>>> alpha
 #
 # What's changed since v0.20.4:
 #   - Docs-only: removed personal references from public docs; no functional changes.
@@ -25,6 +29,24 @@
 # Script README: ./docs/README.bootstrap.md
 # ------------------------------------------------------------------------------
 set -Eeuo pipefail
+<<<<<<< HEAD
+=======
+if [[ $# -eq 0 ]]; then banner 2>/dev/null || true; (print_usage || usage) 2>/dev/null || echo 'Run with --help'; exit 0; fi
+
+
+banner() {
+  cat <<'BANNER'
+┌──────────────────────────────────────────────────────────────────────┐
+│ tkl-actual-bootstrap : bootstrap.sh  v0.22.0                            │
+│ Manage/Bootstrap Actual Sync Server on Turnkey Linux (GPL-3.0-or-later) │
+│ Author: Ken Robinson <ken@turnkeylinux.org>                          │
+│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap           │
+│ Hint:   ./scripts/bootstrap.sh --help                                             │
+└──────────────────────────────────────────────────────────────────────┘
+BANNER
+}
+
+>>>>>>> alpha
 
 # Colors
 if [[ -t 1 ]]; then
@@ -273,4 +295,23 @@ Re-run ./scripts/bootstrap.sh anytime; it's safe and idempotent.
 NEXT
 }
 
+<<<<<<< HEAD
 main "$@"
+=======
+main "$@"
+# --- Nginx template renderer (safe) ---
+render_nginx_site() {
+  local inst="$1" host="$2" port="$3"
+  host="${host//$'\t'/}"; host="${host//$'\r'/}"; host="${host//$'\n'/}"; host="${host// /}"
+  local BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  local tpl="$BUNDLE_DIR/nginx/templates/vhost.conf.tpl"
+  local out="/etc/nginx/sites-available/${inst}-budgetapp.conf"
+  if [[ ! -f "$tpl" ]]; then
+    echo "[ERR ] Missing Nginx template: $tpl" >&2
+    return 1
+  fi
+  sed -e "s|{{HOST}}|${host}|g" -e "s|{{PORT}}|${port}|g" "$tpl" > "$out"
+  ln -sfn "$out" "/etc/nginx/sites-enabled/${inst}-budgetapp.conf"
+}
+make_nginx_site(){ render_nginx_site "$@"; }
+>>>>>>> alpha
