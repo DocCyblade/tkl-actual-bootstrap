@@ -1,0 +1,19 @@
+name: Release bundle
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build bundle archive
+        run: |
+          zip -r "tkl-actual-bootstrap-${GITHUB_REF_NAME}.zip" .
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tkl-actual-bootstrap-${GITHUB_REF_NAME}.zip

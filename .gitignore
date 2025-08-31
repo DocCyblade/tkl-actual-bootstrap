@@ -1,0 +1,19 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Archives & logs
+*.zip
+*.tgz
+*.log
+
+# Node junk if ever created while testing
+node_modules/
+npm-debug.log*
+
+# Python cache (if someone inspects in a venv)
+__pycache__/
+*.pyc
