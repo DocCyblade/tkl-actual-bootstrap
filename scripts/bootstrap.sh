@@ -1,43 +1,59 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# tkl-actual-bootstrap : bootstrap.sh
-# Version: v0.23.0
-# Bootstrap for running Actual Sync Server (multi-instance) on TurnKey Linux.
-# - Creates/uses system user: budget-server (home: /home/budget-server, shell: /bin/bash)
-# - Installs @actual-app/sync-server locally: /srv/app/vX.Y.Z
-# - Symlinks: /srv/app/development|test|production -> /srv/app/vX.Y.Z
-# - Instance data: /srv/<instance>/data (config.json lives here)
-# - Systemd units: <instance>-budgetapp.service (ACTUAL_DATA_DIR points to /srv/<instance>/data)
-# - Nginx TLS: /etc/ssl/private/cert.pem and /etc/ssl/private/cert.key
-# NOTES:
-# * Run as root. Do NOT use sudo. Idempotent and safe to re-run.
 #
-# Recent changes (see CHANGELOG.md for full history):
-# - v0.23.0: Help & README parity; quick-usage on no-args; improved fallback Nginx template;
-#            dynamic instance awareness; safer idempotent steps; clearer logging.
-# - v0.22.1: Default Actual version v25.7.1; systemd uses ./node_modules/.bin/actual-server.
-# - v0.22.0: Robustness & idempotency fixes; CI shellcheck; optional install-ctl.
+# tkl-actual-bootstrap : scripts/bootstrap.sh
+# Version: v0.23.1
+#
+# Purpose
+# -------
+# One-shot, idempotent provisioning of multi-instance Actual Sync Server:
+# - Creates/uses system user 'budget-server' (home=/home/budget-server)
+# - Installs @actual-app/sync-server to /srv/app/vX.Y.Z (as budget-server)
+# - Creates instance links:  /srv/app/{development,test,production} -> /srv/app/vX.Y.Z
+# - Creates data dirs:       /srv/<instance>/data with minimal config.json
+# - Writes systemd units:    <instance>-budgetapp.service (ACTUAL_DATA_DIR points to data dir)
+# - Renders Nginx vhosts:    with TLS at /etc/ssl/private/cert.pem/.key
+# - Health endpoints:        /healthz (static), /health/upstream (backend probe via proxy)
+#
+# Project:  tkl-actual-bootstrap  (Bootstrap for Actual Sync Server on TurnKey Linux)
+# License:  GPL-3.0-or-later
+# Author:   Ken Robinson <ken@turnkeylinux.org>
+# Source:   https://github.com/DocCyblade/tkl-actual-bootstrap
+#
+# Recent changes (see CHANGELOG.md for full history)
+# - v0.23.1: Version bump; docs parity preserved.
+# - v0.23.0: Quick-usage on no-args; safer Nginx template; idempotent file installs;
+#            domain handling via /etc/actual-budget/env; added cmp/useradd to prereqs.
+#
 set -Eeuo pipefail
 
-banner() { cat <<'BANNER'
-┌──────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : bootstrap.sh             v0.23.0   │
-│ Bootstrap for running Actual Sync Server on Turnkey Linux            │
-│ License: GPL-3.0-or-later                                            │
-│ Author: Ken Robinson <ken@turnkeylinux.org>                          │
-│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap           │
-│ Hint:   ./scripts/bootstrap.sh --help                                 │
-└──────────────────────────────────────────────────────────────────────┘
+# ────────────────────────────────────────────────────────────────────────────────
+# Banner & Help
+# ────────────────────────────────────────────────────────────────────────────────
+banner() {
+  cat <<'BANNER'
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ tkl-actual-bootstrap : bootstrap.sh                              v0.23.1     │
+│ Bootstrap for running Actual Sync Server on TurnKey Linux                     │
+│ License: GPL-3.0-or-later                                                     │
+│ Author: Ken Robinson <ken@turnkeylinux.org>                                   │
+│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap                    │
+│ Hint:   ./scripts/bootstrap.sh --help                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
 BANNER
 }
 
-usage_quick() { cat <<'HELP'
+# A short usage for no-arg invocation.
+usage_quick() {
+  cat <<'HELP'
 Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--version vX.Y.Z] [--install-ctl] [--ctl-path /path/actualctl]
 Hint : ./scripts/bootstrap.sh --help   # full documentation & examples
 HELP
 }
 
-print_usage() { cat <<'HELP'
+# The full CLI documentation.
+print_usage() {
+  cat <<'HELP'
 Usage:
   ./scripts/bootstrap.sh
     [--yes|-y]
@@ -76,7 +92,7 @@ Creates/updates:
     - TLS paths: /etc/ssl/private/cert.pem and /etc/ssl/private/cert.key
     - health endpoints: /healthz (static) and /health/upstream (proxied)
 
-Ports:
+Default ports:
   development: 5006
   test:        5000
   production:  5001
@@ -90,35 +106,52 @@ HELP
 }
 
 # Behavior: no-args => banner + quick usage; --help => full help
-if [[ $# -eq 0 ]]; then
-  banner; usage_quick; exit 0
-fi
+if [[ $# -eq 0 ]]; then banner; usage_quick; exit 0; fi
 for a in "$@"; do
-  if [[ "$a" == "-h" || "$a" == "--help" ]]; then
-    banner; print_usage; exit 0
-  fi
+  if [[ "$a" == "-h" || "$a" == "--help" ]]; then banner; print_usage; exit 0; fi
 done
 
-APP_USER="budget-server"; APP_GROUP="budget-server"
-APP_SHELL="/bin/bash";   APP_HOME="/home/${APP_USER}"
-BASE_APP="/srv/app";     BACKUPS="/srv/backups"
+# ────────────────────────────────────────────────────────────────────────────────
+# Config & helpers
+# ────────────────────────────────────────────────────────────────────────────────
+APP_USER="budget-server"
+APP_GROUP="budget-server"
+APP_SHELL="/bin/bash"
+APP_HOME="/home/${APP_USER}"
+
+BASE_APP="/srv/app"
+BACKUPS="/srv/backups"
+
+# Canonical base instances
 INSTANCES=(development test production)
 declare -A PORTS=( ["development"]=5006 ["test"]=5000 ["production"]=5001 )
 
+# TLS defaults for TurnKey
 CERT_CRT="${CERT_CRT:-/etc/ssl/private/cert.pem}"
 CERT_KEY="${CERT_KEY:-/etc/ssl/private/cert.key}"
+
+# Default Actual version to install
 VERSION="${VERSION:-v25.7.1}"
 
-ENV_DIR="/etc/actual-budget"; ENV_FILE="${ENV_DIR}/env"
-DRY_RUN=0; ASSUME_YES=0; BUDGET_DOMAIN=""
-INSTALL_CTL=0; CTL_DST="/usr/local/sbin/actualctl"
+# Env file for domain
+ENV_DIR="/etc/actual-budget"
+ENV_FILE="${ENV_DIR}/env"
+
+DRY_RUN=0
+ASSUME_YES=0
+BUDGET_DOMAIN=""
+INSTALL_CTL=0
+CTL_DST="/usr/local/sbin/actualctl"
 
 log()  { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*" >&2; }
 err()  { printf '[ERR ] %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
-run()  { [[ $DRY_RUN -eq 1 ]] && printf 'DRY-RUN: %s\n' "$*" || eval "$@"; }
 
+# run: execute or print in dry-run mode
+run() { [[ $DRY_RUN -eq 1 ]] && printf 'DRY-RUN: %s\n' "$*" || eval "$@"; }
+
+# Copy file only if content changed (uses cmp); preserves mode via install(1)
 copy_if_changed() {
   local src="$1" dst="$2"
   if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
@@ -128,6 +161,7 @@ copy_if_changed() {
   fi
 }
 
+# Parse CLI
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
@@ -140,15 +174,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Require root and check external tool availability
 require_root() { [[ $(id -u) -eq 0 ]] || die "Run as root (no sudo)."; }
 require_cmd() {
   local miss=0
-  for c in node npm systemctl nginx sed install ln mkdir chown; do
+  for c in node npm systemctl nginx sed install ln mkdir chown cmp useradd; do
     command -v "$c" >/dev/null 2>&1 || { err "Missing command: $c"; miss=1; }
   done
   [[ $miss -eq 0 ]] || die "Install required tools and re-run."
 }
 
+# Read domain from ENV_FILE, if present
 read_env_domain() {
   [[ -f "$ENV_FILE" ]] || return 1
   local line; line="$(grep -E '^BUDGET_DOMAIN=' "$ENV_FILE" || true)"
@@ -158,21 +194,27 @@ read_env_domain() {
   BUDGET_DOMAIN="${BUDGET_DOMAIN//$'\t\r\n '}"
   [[ -n "$BUDGET_DOMAIN" ]]
 }
+
+# Persist chosen domain
 write_env_domain() {
   run "mkdir -p \"$ENV_DIR\""
   local tmp; tmp="$(mktemp)"
   printf 'BUDGET_DOMAIN=%s\n' "$BUDGET_DOMAIN" > "$tmp"
   copy_if_changed "$tmp" "$ENV_FILE"; rm -f "$tmp"
 }
+
+# Prompt domain if not provided and not stored
 prompt_domain_if_needed() {
   if [[ -z "$BUDGET_DOMAIN" ]]; then
     if read_env_domain; then
       log "Using domain from $ENV_FILE: $BUDGET_DOMAIN"; return
     fi
     if [[ $ASSUME_YES -eq 1 ]]; then
-      warn "No domain provided; defaulting to example.com"; BUDGET_DOMAIN="example.com"
+      warn "No domain provided; defaulting to example.com"
+      BUDGET_DOMAIN="example.com"
     else
-      printf "Enter base domain (e.g., example.com): "; read -r BUDGET_DOMAIN
+      printf "Enter base domain (e.g., example.com): "
+      read -r BUDGET_DOMAIN
       BUDGET_DOMAIN="${BUDGET_DOMAIN//$'\t\r\n '}"
       [[ -n "$BUDGET_DOMAIN" ]] || die "No domain provided."
     fi
@@ -180,15 +222,19 @@ prompt_domain_if_needed() {
   write_env_domain
 }
 
+# Ensure the service account and its npm cache exist
 ensure_user() {
-  if id "$APP_USER" >/dev/null 2>&1; then log "User exists: $APP_USER"
-  else log "Creating user '$APP_USER' with home $APP_HOME"
-       run "useradd --system --create-home --home-dir '$APP_HOME' --shell '$APP_SHELL' '$APP_USER'"
+  if id "$APP_USER" >/dev/null 2>&1; then
+    log "User exists: $APP_USER"
+  else
+    log "Creating user '$APP_USER' with home $APP_HOME"
+    run "useradd --system --create-home --home-dir '$APP_HOME' --shell '$APP_SHELL' '$APP_USER'"
   fi
   run "mkdir -p '$APP_HOME/.npm'"
   run "chown -R '$APP_USER:$APP_GROUP' '$APP_HOME'"
 }
 
+# Create required directories for app/backups and each base instance
 ensure_dirs() {
   log "Ensuring directories"
   run "mkdir -p '$BASE_APP' '$BACKUPS'"
@@ -198,13 +244,15 @@ ensure_dirs() {
   done
 }
 
+# Install a specific Actual version into /srv/app/vX.Y.Z as budget-server
 install_version() {
   local ver="$1" dest="${BASE_APP}/${ver}"
   log "Preparing app dir: $dest"
   run "mkdir -p '$dest'"
   run "chown -R '$APP_USER:$APP_GROUP' '$dest'"
   if [[ -f "$dest/node_modules/@actual-app/sync-server/package.json" ]]; then
-    log "Version present: $ver (skipping npm install)"; return
+    log "Version present: $ver (skipping npm install)"
+    return
   fi
   log "Installing @actual-app/sync-server@$ver into $dest"
   if command -v runuser >/dev/null 2>&1; then
@@ -214,6 +262,7 @@ install_version() {
   fi
 }
 
+# Ensure per-instance symlinks point at the chosen version
 ensure_links() {
   local ver="$1"
   for link in "${INSTANCES[@]}"; do
@@ -224,6 +273,7 @@ ensure_links() {
   done
 }
 
+# Write a minimal config.json to /srv/<instance>/data
 write_config_for() {
   local inst="$1" port="$2" data="/srv/${inst}/data" cfg="${data}/config.json"
   local tmp; tmp="$(mktemp)"
@@ -237,8 +287,15 @@ JSON
   copy_if_changed "$tmp" "$cfg"; rm -f "$tmp"
   run "chown -R '$APP_USER:$APP_GROUP' '$data'"
 }
-ensure_configs() { for inst in "${INSTANCES[@]}"; do write_config_for "$inst" "${PORTS[$inst]}"; done; }
 
+# Generate all configs for base instances
+ensure_configs() {
+  for inst in "${INSTANCES[@]}"; do
+    write_config_for "$inst" "${PORTS[$inst]}"
+  done
+}
+
+# Render a systemd unit for an instance
 unit_text() {
   local inst="$1" linkdir="${BASE_APP}/${inst}" datadir="/srv/${inst}/data"
   cat <<UNIT
@@ -261,21 +318,34 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 }
+
+# Install/refresh units for the base instances
 install_units() {
   local changed=0
   for inst in "${INSTANCES[@]}"; do
     local unit="/etc/systemd/system/${inst}-budgetapp.service"
     local tmp; tmp="$(mktemp)"; unit_text "$inst" > "$tmp"
-    if [[ -f "$unit" ]] && cmp -s "$tmp" "$unit"; then log "No change: $unit"; rm -f "$tmp"
-    else log "Installing: $unit"; run "install -m 0644 '$tmp' '$unit'"; changed=1
+    if [[ -f "$unit" ]] && cmp -s "$tmp" "$unit"; then
+      log "No change: $unit"
+      rm -f "$tmp"
+    else
+      log "Installing: $unit"
+      run "install -m 0644 '$tmp' '$unit'"; changed=1
     fi
   done
-  if [[ $changed -eq 1 ]]; then log "Reloading systemd"; run "systemctl daemon-reload"; fi
+  if [[ $changed -eq 1 ]]; then
+    log "Reloading systemd"
+    run "systemctl daemon-reload"
+  fi
   log "Enabling & starting services"
-  for inst in "${INSTANCES[@]}"; do run "systemctl enable --now '${inst}-budgetapp.service'"; done
+  for inst in "${INSTANCES[@]}"; do
+    run "systemctl enable --now '${inst}-budgetapp.service'"
+  done
 }
 
-default_vhost_template() { cat <<'TPL'
+# Built-in fallback Nginx vhost template (used if repo template missing)
+default_vhost_template() {
+  cat <<'TPL'
 # TEMPLATE (fallback) — prefer nginx/templates/vhost.conf.tpl if available
 server {
   listen 80;
@@ -325,6 +395,8 @@ server {
 }
 TPL
 }
+
+# Render a site for an instance (uses repo template if present; else fallback)
 render_nginx_site() {
   local inst="$1" host="$2" port="$3"
   host="${host//$'\t\r\n '}"
@@ -341,6 +413,8 @@ render_nginx_site() {
   copy_if_changed "$tmp" "$out"; rm -f "$tmp"
   run "ln -sfn '$out' '/etc/nginx/sites-enabled/${inst}-budgetapp.conf'"
 }
+
+# Install Nginx sites and test the configuration
 install_nginx() {
   log "Installing Nginx vhosts"
   local dev_host="development-budgetapp.${BUDGET_DOMAIN}"
@@ -350,29 +424,60 @@ install_nginx() {
   render_nginx_site "test"        "$tst_host" "${PORTS[test]}"
   render_nginx_site "production"  "$prd_host" "${PORTS[production]}"
   log "Testing Nginx config"
-  if [[ $DRY_RUN -eq 1 ]]; then printf 'DRY-RUN: nginx -t\n'
-  else if nginx -t; then run "systemctl reload nginx"; else die "nginx -t failed"; fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf 'DRY-RUN: nginx -t\n'
+  else
+    if nginx -t; then
+      run "systemctl reload nginx"
+    else
+      die "nginx -t failed"
+    fi
   fi
 }
 
+# Optionally install scripts/actualctl into PATH for convenience
 install_ctl_if_requested() {
   [[ $INSTALL_CTL -eq 1 ]] || return 0
-  local script_dir src; script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local script_dir src
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   src="${script_dir}/actualctl"
-  if [[ ! -f "$src" ]]; then warn "actualctl not found at $src; skipping --install-ctl"; return 0; fi
-  log "Installing actualctl to ${CTL_DST}"; run "install -m 0755 \"$src\" \"$CTL_DST\""
+  if [[ ! -f "$src" ]]; then
+    warn "actualctl not found at $src; skipping --install-ctl"
+    return 0
+  fi
+  log "Installing actualctl to ${CTL_DST}"
+  run "install -m 0755 \"$src\" \"$CTL_DST\""
 }
 
+# Main orchestrator
 main() {
-  banner; require_root; require_cmd; prompt_domain_if_needed
-  log "Parameters"; log "  VERSION       = $VERSION"; log "  DOMAIN        = $BUDGET_DOMAIN"
-  log "  DRY_RUN       = $DRY_RUN"; log "  CERT_CRT      = $CERT_CRT"; log "  CERT_KEY      = $CERT_KEY"
-  log "  INSTALL_CTL   = $INSTALL_CTL"; [[ $INSTALL_CTL -eq 1 ]] && log "  CTL_DST       = $CTL_DST"
-  ensure_user; ensure_dirs; install_version "$VERSION"; ensure_links "$VERSION"
-  ensure_configs; install_units; install_nginx; install_ctl_if_requested
-  log "Complete."; log "Visit:"
+  banner
+  require_root
+  require_cmd
+  prompt_domain_if_needed
+
+  log "Parameters"
+  log "  VERSION       = $VERSION"
+  log "  DOMAIN        = $BUDGET_DOMAIN"
+  log "  DRY_RUN       = $DRY_RUN"
+  log "  CERT_CRT      = $CERT_CRT"
+  log "  CERT_KEY      = $CERT_KEY"
+  log "  INSTALL_CTL   = $INSTALL_CTL"
+  [[ $INSTALL_CTL -eq 1 ]] && log "  CTL_DST       = $CTL_DST"
+
+  ensure_user
+  ensure_dirs
+  install_version "$VERSION"
+  ensure_links "$VERSION"
+  ensure_configs
+  install_units
+  install_nginx
+  install_ctl_if_requested
+
+  log "Complete. Health endpoints:"
   log "  https://development-budgetapp.$BUDGET_DOMAIN/healthz"
   log "  https://test-budgetapp.$BUDGET_DOMAIN/healthz"
   log "  https://production-budgetapp.$BUDGET_DOMAIN/healthz"
 }
+
 main "$@"

@@ -12,6 +12,8 @@ This changelog is **cumulative** and organized into three parts:
   - Fix: `actualctl list` now shows only **version directories** under `/srv/app` (e.g., `v25.7.1`) and never lists symlinked directory contents.
 - **scripts/bootstrap.sh**
   - No changes since **v0.23.0** (help/UX parity, safer Nginx fallback, idempotency, domain handling).
+- **Docs**
+  - Added: `README.nginx.md`, `README.systemd.md`, `README.configs.md`, `README.ci.md`, `TROUBLESHOOTING.md`, `MIGRATION.md`.
 
 ---
 
@@ -68,10 +70,3 @@ This changelog is **cumulative** and organized into three parts:
 ### v0.21.0 — 2025-08-30
 **From tag**
 - Rebranded to **tkl-actual-bootstrap**; added GPLv3 licensing blocks and **LICENSE**.
-
----
-
-### Historical notes (pre–v0.21.0)
-- Earlier “Rev” series (Rev 1–19) exist in the repository history and tags; where possible,
-  details were reconstructed from commit/tag messages to maintain continuity with the new
-  semantic versioning (v0.xx.y).

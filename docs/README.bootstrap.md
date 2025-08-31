@@ -1,47 +1,47 @@
-# bootstrap.sh — Documentation (v0.22.0)
+# README — scripts/bootstrap.sh (v0.23.1)
 
-**Project:** tkl-actual-bootstrap  
-**Author:** Ken Robinson (<ken@turnkeylinux.org>)  
-**License:** GPL-3.0-or-later — see [LICENSE](../LICENSE)  
-**Source:** https://github.com/DocCyblade/tkl-actual-bootstrap
+One-shot, idempotent provisioning for multi-instance Actual Sync Server on TurnKey Linux.
 
-**Latest changes:** See root `CHANGELOG.md` → `scripts/bootstrap.sh`.
-
-## Purpose
-Provision a host with multi-instance Actual Sync Server, create systemd services, generate Nginx vhosts for your domain, and set up symlinked app tracks.
-
-## Usage
+## Quick usage
 ```
-./scripts/bootstrap.sh [--yes] [--dry-run] [--domain example.com] [-h|--help]
+./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--version vX.Y.Z] [--install-ctl] [--ctl-path /path/actualctl]
+```
+Tip: run with `--dry-run` first.
+
+## Full options
+- `--yes|-y` — non-interactive mode
+- `--dry-run` — preview actions without changes
+- `--domain` — base domain; stored in `/etc/actual-budget/env`
+- `--version` — Actual npm version (default: **v25.7.1**)
+- `--install-ctl` — install `scripts/actualctl` into PATH
+- `--ctl-path` — destination for `actualctl` (default: `/usr/local/sbin/actualctl`)
+
+## Prerequisites
+- Root shell (no `sudo` assumptions)
+- TurnKey Linux Node.js appliance (v18) with updates (`apt update && apt upgrade`)
+- TLS files at `/etc/ssl/private/cert.key` and `/etc/ssl/private/cert.pem`
+- Commands: `node`, `npm`, `systemctl`, `nginx`, `sed`, `install`, `ln`, `mkdir`, `chown`, `cmp`, `useradd`
+
+## What it creates
+- System user `budget-server` (home `/home/budget-server`, shell `/bin/bash`)
+- App under `/srv/app/vX.Y.Z` and symlinks `/srv/app/development|test|production`
+- Data under `/srv/<instance>/data` (writes `config.json`)
+- Units `<instance>-budgetapp.service` (ExecStart: `./node_modules/.bin/actual-server`)
+- Nginx vhosts with `/healthz` and `/health/upstream`
+
+## Ports
+- development: **5006**
+- test: **5000**
+- production: **5001**
+
+## Examples
+```
+./scripts/bootstrap.sh --dry-run
+./scripts/bootstrap.sh --yes --domain example.com --version v25.7.1
+./scripts/bootstrap.sh --yes --install-ctl --ctl-path /usr/local/sbin/actualctl
 ```
 
-### Options
-- `--yes, -y` — run non-interactively.
-- `--dry-run` — print actions without changing the system.
-- `--domain example.com` — set the domain for vhosts. Saved to `/etc/actual-budget/env`.
-- `-h, --help` — usage text.
-
-## What it does
-1. Creates/updates the `budget-server` system user (home: `/home/budget-server`).
-2. Ensures directories:
-   - `/srv/app`, `/srv/backups`
-   - `/srv/{development,test,production}/data`
-3. Installs `@actual-app/sync-server@${VERSION}` into `/srv/app/${VERSION}` via npm (as `budget-server`).
-4. Creates symlinks: `/srv/app/{development,test,production} -> /srv/app/${VERSION}`.
-5. Seeds `config.json` into each instance’s data dir.
-6. Installs systemd units and starts services.
-7. Generates Nginx vhosts: `development|test|production-budgetapp.<domain>` with `/healthz` and `/health/upstream` endpoints.
-8. Tests and reloads Nginx.
-
-## Idempotency
-- Re-running is safe: existing dirs/links are detected, and files are only replaced if changed.
-
-## Logs & Troubleshooting
-- Systemd status/logs: `systemctl status production-budgetapp.service`, `journalctl -u production-budgetapp.service -f`
-- Nginx test: `nginx -t`
-- Health checks: 
-  - `curl -I https://development-budgetapp.example.com/healthz`
-  - `curl -I https://development-budgetapp.example.com/health/upstream`
-
-
-See also top-level README **Troubleshooting** and **Prerequisites** sections.
+## Notes
+- Does **not** chown `/srv`; only touches per-instance dirs and app-version dirs.
+- npm runs as `budget-server` with cache under `/home/budget-server/.npm`.
+- Idempotent: safe to re-run; skips unchanged steps.

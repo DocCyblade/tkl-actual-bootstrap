@@ -1,44 +1,47 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# tkl-actual-bootstrap : actualctl
+#
+# tkl-actual-bootstrap : scripts/actualctl
 # Version: v0.23.1
-# Manage Actual Sync Server multi-instance on TurnKey Linux.
 #
-# Recent changes (see CHANGELOG.md):
-# - v0.23.1: Fix `list` version display: show only version directories; avoid listing contents.
+# Purpose
+# -------
+# Orchestrates multi-instance Actual Sync Server on TurnKey Linux:
+# - Manage installed app versions under /srv/app/vX.Y.Z
+# - Switch instance symlinks: /srv/app/{development,test,production} -> /srv/app/vX.Y.Z
+# - Create/manage additional instances
+# - Back up & restore instance data under /srv/<instance>/data
+# - Health checks (backend and via Nginx) and a consolidated "doctor"
+#
+# Project:  tkl-actual-bootstrap  (Bootstrap for Actual Sync Server on TurnKey Linux)
+# License:  GPL-3.0-or-later
+# Author:   Ken Robinson <ken@turnkeylinux.org>
+# Source:   https://github.com/DocCyblade/tkl-actual-bootstrap
+#
+# Recent changes (see CHANGELOG.md for full history)
+# - v0.23.1: Fix `list` to only show version directories (v*), never print contents.
 # - v0.23.0: Add `instance set-port`, `health`, and `doctor`; help/README parity.
-# - v0.22.1: Default Actual version set; stable ExecStart.
-# - v0.22.0: Instance add/rm; backups prune; verify command.
+# - v0.22.x: Quality-of-life improvements, stable ExecStart in units.
 #
-# Instances: development, test, production (+ any discovered under /srv)
-# Links:     /srv/app/<instance> -> /srv/app/vX.Y.Z
-# Data:      /srv/<instance>/data (ACTUAL_DATA_DIR)
-# Units:     <instance>-budgetapp.service
-# NOTES:
-# * Run as root for commands that change the system (fetch/switch/backup/restore/instance/service).
-# * Idempotent where applicable.
-
 set -Eeuo pipefail
 
-#######################################
-# Banner
-#######################################
+# ────────────────────────────────────────────────────────────────────────────────
+# Banner & Help
+# ────────────────────────────────────────────────────────────────────────────────
 banner() {
   cat <<'BANNER'
-┌──────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : actualctl                 v0.23.1   │
-│ Bootstrap for running Actual Sync Server on Turnkey Linux            │
-│ License: GPL-3.0-or-later                                            │
-│ Author: Ken Robinson <ken@turnkeylinux.org>                          │
-│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap           │
-│ Hint:   actualctl --help                                             │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ tkl-actual-bootstrap : actualctl                                 v0.23.1     │
+│ Bootstrap for running Actual Sync Server on TurnKey Linux                     │
+│ License: GPL-3.0-or-later                                                     │
+│ Author: Ken Robinson <ken@turnkeylinux.org>                                   │
+│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap                    │
+│ Hint:   actualctl --help                                                      │
+└──────────────────────────────────────────────────────────────────────────────┘
 BANNER
 }
 
-#######################################
-# Usage (quick) and Help (full)
-#######################################
+# A short usage shown when no args or unknown command are provided.
 usage_quick() {
   cat <<'HELP'
 Usage: actualctl <command> [args]
@@ -46,6 +49,7 @@ Hint : actualctl --help    # for full documentation and examples
 HELP
 }
 
+# The full help, including command list and examples.
 print_usage() {
   cat <<'HELP'
 Usage: actualctl <command> [args]
@@ -95,35 +99,32 @@ Examples:
 HELP
 }
 
-#######################################
-# Early arg guard: no-args (quick) vs --help (full)
-#######################################
+# Behavior: with no args show banner + quick usage; with --help show full help.
 if [[ $# -eq 0 ]]; then
-  banner
-  usage_quick
-  exit 0
+  banner; usage_quick; exit 0
 fi
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
-  banner
-  print_usage
-  exit 0
+  banner; print_usage; exit 0
 fi
 
-#######################################
-# Config
-#######################################
+# ────────────────────────────────────────────────────────────────────────────────
+# Global configuration and tiny helpers
+# ────────────────────────────────────────────────────────────────────────────────
 APP_USER="budget-server"
 APP_GROUP="budget-server"
 BASE_APP="/srv/app"
 BACKUPS="/srv/backups"
+
+# Base instances always recognized; discover_instances() will also add any /srv/*/data
 INSTANCES=(development test production)
 declare -A PORTS=( ["development"]=5006 ["test"]=5000 ["production"]=5001 )
 
-# helpers
 log()  { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*" >&2; }
 err()  { printf '[ERR ] %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
+
+# Execute a command as APP_USER (prefers runuser, falls back to su)
 as_user() {
   if command -v runuser >/dev/null 2>&1; then
     runuser -u "$APP_USER" -- bash -lc "$*"
@@ -132,13 +133,16 @@ as_user() {
   fi
 }
 
+# Enforce root context for mutating commands (no sudo assumptions)
 require_root() { [[ $(id -u) -eq 0 ]] || die "Run as root (no sudo)."; }
 
-json_get() { # json_get <file> <key>
+# Minimal JSON extractor (schema is tiny: port, hostname). Prefer jq if available.
+# json_get <file> <key>
+json_get() {
   awk -v k="$2" -F': *' '/"'"$2"'"/ {gsub(/[",]/,"",$2); print $2; exit}' "$1" 2>/dev/null || true
 }
 
-# Discover instances dynamically (default three + any /srv/* with data dir)
+# Discover instances dynamically by presence of /srv/*/data
 discover_instances() {
   local seen=" development test production "
   local out=(development test production)
@@ -151,18 +155,19 @@ discover_instances() {
   printf '%s\n' "${out[@]}"
 }
 
-# Read domain from /etc/actual-budget/env (BUDGET_DOMAIN=...)
+# Read BUDGET_DOMAIN from the env file written by bootstrap (if present)
 read_domain() {
   local f="/etc/actual-budget/env"
   [[ -f "$f" ]] || return 1
-  local line; line="$(grep -E '^BUDGET_DOMAIN=' "$f" || true)"
+  local line
+  line="$(grep -E '^BUDGET_DOMAIN=' "$f" || true)"
   [[ -n "$line" ]] || return 1
   line="${line#BUDGET_DOMAIN=}"
   line="${line%\"}"; line="${line#\"}"
   printf '%s\n' "$line"
 }
 
-# Pick next free port >= 5002 not in use in any config.json
+# Determine the next free port >= 5002 based on all instance config.json files
 pick_next_port() {
   local used=()
   local p
@@ -170,17 +175,22 @@ pick_next_port() {
     p="$(json_get "/srv/$n/data/config.json" port || true)"
     [[ -n "$p" ]] && used+=("$p")
   done < <(discover_instances)
+
   for ((p=5002; p<65535; p++)); do
     local found=0
-    for x in "${used[@]}"; do [[ "$x" = "$p" ]] && { found=1; break; }; done
+    for x in "${used[@]}"; do
+      [[ "$x" = "$p" ]] && { found=1; break; }
+    done
     [[ $found -eq 0 ]] && { printf '%s\n' "$p"; return 0; }
   done
   return 1
 }
 
-#######################################
-# Introspection
-#######################################
+# ────────────────────────────────────────────────────────────────────────────────
+# Commands
+# ────────────────────────────────────────────────────────────────────────────────
+
+# List instances and installed versions.
 cmd_list() {
   printf "%-12s %-28s %s\n" "INSTANCE" "LINK->VERSION" "SERVICE"
   while IFS= read -r inst; do
@@ -194,9 +204,10 @@ cmd_list() {
     state="$(systemctl is-active "$svc" 2>/dev/null || echo inactive)"
     printf "%-12s %-28s %s\n" "$inst" "${target#${BASE_APP}/}" "$state"
   done < <(discover_instances)
+
   echo
   echo "Available versions under ${BASE_APP}:"
-  # Show only version directories (v*), not their contents; ignore symlinks like 'development'
+  # Only show version directories (v*). Do not expand or list contents.
   local vs=()
   shopt -s nullglob
   for d in "${BASE_APP}"/v*; do
@@ -210,6 +221,7 @@ cmd_list() {
   fi
 }
 
+# Basic sanity checks (tools, data dirs, services exist)
 cmd_check() {
   require_root
   local ok=1
@@ -225,6 +237,7 @@ cmd_check() {
   [[ $ok -eq 1 ]] && log "check: OK" || die "check: FAIL"
 }
 
+# Print environment paths and selected port/host per instance
 cmd_env() {
   local inst="${1:-}"
   if [[ -z "$inst" ]]; then
@@ -241,14 +254,13 @@ cmd_env() {
     ver="$(basename "$(readlink -f "$link")")"
   fi
   local port host
-  port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"
+  port="$(json_get "$cfg" port)"
+  host="$(json_get "$cfg" hostname)"
   printf "%s:\n  ACTUAL_DATA_DIR=%s\n  config=%s (port=%s host=%s)\n  app_link=%s -> %s\n" \
     "$inst" "$dat" "$cfg" "${port:-?}" "${host:-?}" "$link" "$ver"
 }
 
-#######################################
-# Version management
-#######################################
+# Fetch/install an Actual version into /srv/app/<ver> using npm as budget-server
 cmd_fetch() {
   require_root
   local ver="${1:-}"
@@ -264,6 +276,7 @@ cmd_fetch() {
   log "fetch: done"
 }
 
+# Switch an instance symlink and restart its unit
 cmd_switch() {
   require_root
   local inst="${1:-}"
@@ -277,6 +290,7 @@ cmd_switch() {
   log "switch: $inst -> $ver"
 }
 
+# Verify a version by installing to a temp dir, then remove it
 cmd_verify() {
   require_root
   local ver="${1:-}"
@@ -295,9 +309,7 @@ cmd_verify() {
   log "verify: cleaned"
 }
 
-#######################################
-# Backup / Restore
-#######################################
+# Create a timestamped tarball of an instance's data dir
 cmd_backup() {
   require_root
   local inst="${1:-}"
@@ -318,6 +330,7 @@ cmd_backup() {
   echo "$out"
 }
 
+# Restore a backup tarball to an instance (with pre-restore backup)
 cmd_restore() {
   require_root
   local inst="${1:-}"
@@ -334,6 +347,7 @@ cmd_restore() {
   log "restore: done for $inst"
 }
 
+# Keep only N newest backups per instance (default 7)
 cmd_prune_backups() {
   require_root
   local keep=7
@@ -341,24 +355,22 @@ cmd_prune_backups() {
     keep="${2:-7}"
   fi
   mkdir -p "$BACKUPS"
-  for inst in $(discover_instances); do
-    :
-  done
-  for inst in "${INSTANCES[@]}"; do :; done # keep declared default instances available
+  # ensure default instances are declared (shellcheck friendliness)
+  for inst in "${INSTANCES[@]}"; do :; done
+  # walk discovered instances
   for inst in $(discover_instances); do
     mapfile -t files < <(ls -1t "$BACKUPS"/${inst}-*.tgz 2>/dev/null || true)
     if (( ${#files[@]} > keep )); then
       for f in "${files[@]:$keep}"; do
-        rm -f "$f"; log "pruned: $f"
+        rm -f "$f"
+        log "pruned: $f"
       done
     fi
   done
   log "prune-backups: keep=${keep}"
 }
 
-#######################################
-# Instance management
-#######################################
+# Generate a systemd unit text for an instance
 _unit_text() {
   local inst="$1"
   local linkdir="${BASE_APP}/${inst}"
@@ -384,6 +396,7 @@ WantedBy=multi-user.target
 UNIT
 }
 
+# Create a new instance (optional: seed data from another)
 cmd_instance_add() {
   require_root
   local name="${1:-}"
@@ -419,7 +432,7 @@ cmd_instance_add() {
   fi
   ln -sfn "$tgt" "$link"
 
-  # ensure config.json with port
+  # seed minimal config.json
   local cfg="${dat}/config.json"
   local host="127.0.0.1"
   local port=""
@@ -441,10 +454,12 @@ cmd_instance_add() {
   _unit_text "$name" > "$unit"
   systemctl daemon-reload
   systemctl enable --now "${name}-budgetapp.service"
+
   log "instance add: $name -> $(basename "$tgt")"
   log "instance add: ${name} port=${port}"
 }
 
+# Remove an instance (optionally purge its /srv/<name> dir)
 cmd_instance_rm() {
   require_root
   local name="${1:-}"
@@ -464,6 +479,7 @@ cmd_instance_rm() {
   log "instance rm: $name"
 }
 
+# Update the port in config.json and restart the instance unit
 cmd_instance_set_port() {
   require_root
   local name="${1:-}" newp="${2:-}"
@@ -472,7 +488,8 @@ cmd_instance_set_port() {
   local dat="/srv/${name}/data"; local cfg="${dat}/config.json"
   [[ -d "$dat" ]] || die "Instance data dir not found: $dat"
   local host; host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
-  local tmp; tmp="$(mktemp)"; {
+  local tmp; tmp="$(mktemp)"
+  {
     echo "{"
     echo "  \"port\": ${newp},"
     echo "  \"hostname\": \"${host}\""
@@ -484,43 +501,42 @@ cmd_instance_set_port() {
   log "instance set-port: ${name} -> ${newp}"
 }
 
-#######################################
 # Service wrappers
-#######################################
 cmd_service() {
   require_root
-  local inst="${1:-}"
-  local op="${2:-}"
+  local inst="${1:-}" op="${2:-}"
   [[ -n "$inst" && -n "$op" ]] || die "Usage: actualctl service <INSTANCE> start|stop|restart|status"
   systemctl "$op" "${inst}-budgetapp.service"
 }
 cmd_logs() {
-  local inst="${1:-}"
-  local lines="${2:-200}"
+  local inst="${1:-}" lines="${2:-200}"
   [[ -n "$inst" ]] || die "Usage: actualctl logs <INSTANCE> [lines]"
   journalctl -u "${inst}-budgetapp.service" -n "$lines" --no-pager
 }
 
-#######################################
-# Health checks
-#######################################
-_curl_code() { # _curl_code <url>
-  curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 --insecure "$1" || true
-}
+# Perform a GET and only return the HTTP code (2–5s timeouts)
+_curl_code() { curl -fsS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 --insecure "$1" || true; }
 
+# Check upstream (via Nginx) and backend (direct port) health
 cmd_health() {
   local inst="${1:-}"
   local domain; domain="$(read_domain || true)"
   local rc=0
+
+  # If no instance given, check all
   if [[ -z "$inst" ]]; then
-    while IFS= read -r i; do cmd_health "$i" || rc=1; done < <(discover_instances)
+    while IFS= read -r i; do
+      cmd_health "$i" || rc=1
+    done < <(discover_instances)
     [[ $rc -eq 0 ]] || return 1
     return 0
   fi
+
   local cfg="/srv/${inst}/data/config.json"
   local port; port="$(json_get "$cfg" port)"
   [[ -n "$port" ]] || { err "health: no port in $cfg"; return 1; }
-  # upstream via nginx (if domain known)
+
+  # Upstream via Nginx if domain known
   if [[ -n "$domain" ]]; then
     local host="${inst}-budgetapp.${domain}"
     local up="https://${host}/health/upstream"
@@ -534,7 +550,8 @@ cmd_health() {
   else
     warn "health: domain not set in /etc/actual-budget/env; skipping upstream check for ${inst}"
   fi
-  # backend direct
+
+  # Backend direct
   local be="http://127.0.0.1:${port}/"
   local bcode; bcode="$(_curl_code "$be")"
   if [[ "$bcode" == "200" || "$bcode" == "404" ]]; then
@@ -546,20 +563,24 @@ cmd_health() {
   [[ $rc -eq 0 ]]
 }
 
+# A fuller diagnostic sweep: tools, nginx syntax, service state, ports, upstream
 cmd_doctor() {
   require_root
   local ok=1
-  # tools
+
+  # Tooling
   for c in node npm systemctl nginx curl ss; do
     command -v "$c" >/dev/null 2>&1 || { err "doctor: missing tool: $c"; ok=0; }
   done
-  # nginx syntax
+
+  # Nginx config validity
   if nginx -t >/dev/null 2>&1; then
     log "doctor: nginx -t OK"
   else
     err "doctor: nginx -t FAILED"; ok=0
   fi
-  # per instance
+
+  # Per-instance checks
   while IFS= read -r inst; do
     local svc="${inst}-budgetapp.service"
     if systemctl is-active --quiet "$svc"; then
@@ -567,6 +588,7 @@ cmd_doctor() {
     else
       err "doctor: service NOT ACTIVE ${svc}"; ok=0
     fi
+
     local cfg="/srv/${inst}/data/config.json"
     local port; port="$(json_get "$cfg" port)"
     if [[ -z "$port" ]]; then
@@ -579,18 +601,20 @@ cmd_doctor() {
       fi
     fi
   done < <(discover_instances)
-  # upstreams
+
+  # Upstreams
   if cmd_health >/dev/null; then
     log "doctor: upstream health OK"
   else
     err "doctor: upstream health FAILED"; ok=0
   fi
+
   [[ $ok -eq 1 ]] && log "doctor: OK" || { err "doctor: FAIL"; return 1; }
 }
 
-#######################################
+# ────────────────────────────────────────────────────────────────────────────────
 # Dispatch
-#######################################
+# ────────────────────────────────────────────────────────────────────────────────
 case "${1:-}" in
   list)              shift; cmd_list "$@";;
   check)             shift; cmd_check "$@";;
