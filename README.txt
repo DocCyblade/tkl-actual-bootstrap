@@ -1,4 +1,4 @@
-tkl-actual-bootstrap  v0.23.2
+tkl-actual-bootstrap  v0.24.1
 Bootstrap for running Actual Sync Server on TurnKey Linux (NodeJS appliance v18)
 
 License: GNU GPLv3
@@ -22,12 +22,13 @@ Notes:
 - If --domain is omitted, bootstrap will prompt (or default to example.com in -y mode).
 - By default, bootstrap installs @actual-app/sync-server v25.7.1 and installs the
   "actualctl" CLI into /usr/local/sbin/actualctl (override with --ctl-path).
+- To install a specific version, add --install-version vX.Y.Z
 
 
 PREREQUISITES
 -------------
 - TurnKey Linux NodeJS appliance v18 with: apt update && apt upgrade
-- Tools available: node, npm, nginx, systemd, curl
+- Tools available: node, npm, nginx, systemd, curl  (optional: jq, rsync)
 - TLS certificates on TurnKey:
   /etc/ssl/private/cert.pem
   /etc/ssl/private/cert.key
@@ -55,8 +56,10 @@ Nginx health endpoints:
 - https://<instance>-budgetapp.<domain>/healthz         (nginx-only, returns "ok")
 - https://<instance>-budgetapp.<domain>/health/upstream (proxies to backend; expect 200/404)
 
-CLI helper:
+CLI helpers:
 - actualctl --help
+- actualctl --version
+- ./scripts/bootstrap.sh --version
 
 
 WHAT BOOTSTRAP DOES
@@ -69,6 +72,7 @@ WHAT BOOTSTRAP DOES
 - Writes systemd units with graceful stop (SIGINT, TimeoutStopSec=15) and conservative hardening.
 - Writes Nginx vhosts with TLS, /healthz, /health/upstream.
 - Installs "actualctl" into PATH by default (override path with --ctl-path).
+- Installs package VERSION manifest to /usr/share/tkl-actual-bootstrap/VERSION
 - Records domain in /etc/actual-budget/env (BUDGET_DOMAIN=...).
 
 Systemd units (per instance):
@@ -91,6 +95,7 @@ Switch an instance to a version:
 Health and doctor:
   actualctl health production
   actualctl doctor
+  actualctl doctor --fix
 
 Backups:
   actualctl backup production "pre-upgrade"
@@ -130,14 +135,13 @@ MIGRATION FROM PRE–v0.20
 - See docs/MIGRATION.txt for step-by-step restore and validation
 
 
-NOTES FOR v0.23.2
+NOTES FOR v0.24.1
 -----------------
-- bootstrap.sh installs "actualctl" by default (removed --install-ctl; --ctl-path remains as an override)
-- --domain must be paired with --yes or --dry-run; otherwise bootstrap will prompt
-- Systemd units include graceful stop and conservative hardening by default
-- Configs are seeded from configs/config.json.tpl
-- Removed the unused systemd/budgetapp@.service from the tree
-- Documentation migrated to plain text (.txt)
+- CLI: `bootstrap.sh` now uses `--install-version` to select the Actual app version; `--version` (no arg) prints script/package versions.
+- Dynamic versioning in both scripts; banners and `--version` outputs show `script <Script-Version> (package <PKG_VERSION>)`.
+- `actualctl doctor --fix` installs/refreshes the system VERSION manifest.
+- New `VERSION` manifest is installed to `/usr/share/tkl-actual-bootstrap/VERSION` by bootstrap.
+- Synchronized headers and plain-text docs; see CHANGELOG.txt for details.
 
 
 LICENSE

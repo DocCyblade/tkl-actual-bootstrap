@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/bootstrap.sh
-# Version: v0.23.3
+# Version: v0.24.1
+# Script-Version : v1.8.0
+# Packaged-In    : v0.24.1
+# Package-Compat : >=v0.24.1 <v0.25.0
+# Last-Reviewed  : 2025-09-27 with package v0.24.1
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Summary:
@@ -10,7 +14,7 @@
 #   installs the app locally under /srv/app/vX.Y.Z, writes systemd + nginx,
 #   and installs 'actualctl' into PATH by default.
 #
-# Changes since v0.23.2:
+# Changes since v0.23.3:
 #   - Docs-only: updated banner & references to CHANGELOG.txt / README.txt
 #   - No functional changes
 #
@@ -21,16 +25,55 @@
 # Usage: ./scripts/bootstrap.sh --help     (quick usage shown on no-args)
 # ==============================================================================
 
+
 set -Eeuo pipefail
+
+# --- dynamic version helpers (do not remove) ---
+__tklab_read_version_file() {
+  local f
+  for f in "${TKL_ACTUAL_VERSION_FILE:-}" "./VERSION" \
+           "/usr/share/tkl-actual-bootstrap/VERSION" \
+           "/etc/actual-budget/pkg.version"; do
+    [[ -n "$f" && -r "$f" ]] || continue
+    if grep -q '^PKG_VERSION=' "$f" 2>/dev/null; then
+      # shellcheck disable=SC1090
+      . "$f"
+      [[ -n "$PKG_VERSION" ]] && { echo "$PKG_VERSION"; return; }
+    else
+      read -r v <"$f" || true
+      [[ -n "$v" ]] && { echo "$v"; return; }
+    fi
+  done
+}
+
+_pkg_version() {
+  local v
+  [[ -n "$TKL_ACTUAL_PKG_VERSION" ]] && { echo "$TKL_ACTUAL_PKG_VERSION"; return; }
+  v=$(__tklab_read_version_file)
+  [[ -n "$v" ]] && { echo "$v"; return; }
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    v=$(git describe --tags --abbrev=0 2>/dev/null || git describe --tags --always 2>/dev/null)
+    [[ -n "$v" ]] && { echo "$v"; return; }
+  fi
+  awk -F: '/^# *Packaged-In/{gsub(/[ \t]/,"",$2); print $2; exit}' "${BASH_SOURCE[0]}" 2>/dev/null || echo "unknown"
+}
+
+_script_version() {
+  awk -F: '/^# *Script-Version/{gsub(/[ \t]/,"",$2); print $2; exit}' "${BASH_SOURCE[0]}" 2>/dev/null || echo "unknown"
+}
+
+# Cache once per run
+PKG_VERSION="$(_pkg_version)"
+SCRIPT_VERSION="$(_script_version)"
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Banner + help
 # ───────────────────────────────────────────────────────────────────────────────
 banner() {
-  cat <<'BANNER'
+  cat <<BANNER
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : bootstrap.sh                              v0.23.3     │
-│ Bootstrap for running Actual Sync Server on TurnKey Linux                     │
+│ tkl-actual-bootstrap : bootstrap.sh               script \${SCRIPT_VERSION} │
+│ Bootstrap for running Actual Sync Server on TurnKey Linux     package \${PKG_VERSION} │
 │ License: GPL-3.0-or-later                                                     │
 │ Author: Ken Robinson <ken@turnkeylinux.org>                                   │
 │ Source: https://github.com/DocCyblade/tkl-actual-bootstrap                    │
@@ -41,7 +84,7 @@ BANNER
 
 usage_quick() {
   cat <<'HELP'
-Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--version vX.Y.Z] [--ctl-path /path/actualctl]
+Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--version vX.Y.Z] [--ctl-path /path/actualctl] [--about]
 Hint : ./scripts/bootstrap.sh --help   # full documentation & examples
 HELP
 }
@@ -56,6 +99,7 @@ Usage:
     [--version vX.Y.Z]
     [--ctl-path /usr/local/sbin/actualctl]
     [--help]
+    [--about]
 
 Options:
   --yes, -y            Non-interactive mode (assume “Yes” to prompts) for LIVE runs
@@ -66,6 +110,7 @@ Options:
   --version VER        Actual sync-server npm version (default: v25.7.1)
   --ctl-path PATH      Destination for installing actualctl (default: /usr/local/sbin/actualctl)
   --help               Show this help and exit
+  --about             Show script/package versions and exit
 
 Default ports:
   development: 5006
@@ -152,6 +197,7 @@ while [[ $# -gt 0 ]]; do
     --domain)     BUDGET_DOMAIN="${2:-}"; DOMAIN_FLAG_SET=1; shift 2 ;;
     --version)    VERSION="${2:-}"; shift 2 ;;
     --ctl-path)   CTL_DST="${2:-/usr/local/sbin/actualctl}"; shift 2 ;;
+    --about)      echo "bootstrap.sh ${SCRIPT_VERSION} (package ${PKG_VERSION})"; exit 0 ;;
     *)            err "Unknown arg: $1"; usage_quick; exit 2 ;;
   esac
 done
@@ -564,6 +610,8 @@ main() {
   log "  CERT_CRT      = $CERT_CRT"
   log "  CERT_KEY      = $CERT_KEY"
   log "  CTL_DST       = $CTL_DST"
+  log "  PKG_VERSION   = $PKG_VERSION"
+  log "  SCRIPT_VERSION= $SCRIPT_VERSION"
 
   ensure_user
   ensure_dirs

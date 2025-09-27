@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # tkl-actual-bootstrap : nginx/templates/vhost.conf.tpl
-# Version: v0.23.2
+# File-Version: 1.0
 #
 # Template variables (rendered by bootstrap):
 #   {{HOST}}  -> FQDN for this instance (e.g., production-budgetapp.example.com)

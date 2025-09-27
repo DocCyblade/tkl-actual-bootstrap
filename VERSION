@@ -1,0 +1,5 @@
+# tkl-actual-bootstrap package version manifest
+# Read by scripts/bootstrap.sh and scripts/actualctl
+# Prefer variable form; scripts also accept a single-line version value.
+PKG_VERSION=v0.24.1
+PKG_COMPAT=">=v0.24.1 <v0.25.0"

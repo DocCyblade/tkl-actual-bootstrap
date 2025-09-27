@@ -1,4 +1,4 @@
-scripts/bootstrap.sh — README  (v0.23.2)
+scripts/bootstrap.sh — README  (v0.24.1)
 ========================================
 
 Purpose
@@ -12,6 +12,9 @@ Preview:
 
 Live (non-interactive):
   ./scripts/bootstrap.sh -y --domain example.com
+
+Install a specific version (preview):
+  ./scripts/bootstrap.sh --dry-run --install-version v25.9.0 --domain example.com
 
 Notes:
 - If you pass --domain, you must also pass --yes (live) or --dry-run (preview).
@@ -27,19 +30,21 @@ What it does
 - Writes systemd units (graceful stop + conservative hardening).
 - Writes Nginx vhosts with /healthz and /health/upstream.
 - Installs "actualctl" into PATH by default (override with --ctl-path).
+- Installs package VERSION manifest to /usr/share/tkl-actual-bootstrap/VERSION.
 
 Usage
 -----
-./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--version vX.Y.Z] [--ctl-path /path/actualctl]
+./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--install-version vX.Y.Z] [--ctl-path /path/actualctl] [--version]
 
 Options
 -------
 --yes, -y       Non-interactive live mode (assume Yes).
 --dry-run       Preview only, no changes.
 --domain NAME   Base domain (e.g., example.com). Requires --yes or --dry-run if provided.
---version VER   Actual sync-server version (default: v25.7.1).
+--install-version VER   Actual sync-server npm version to install (default: v25.7.1).
 --ctl-path PATH Install actualctl to this path (default: /usr/local/sbin/actualctl).
 --help          Show help.
+--version       Show script/package versions and exit.
 
 Files written
 -------------
@@ -47,6 +52,7 @@ Files written
 /etc/systemd/system/<instance>-budgetapp.service
 /etc/nginx/sites-available/<instance>-budgetapp.conf  (+ symlink in sites-enabled)
 /srv/<instance>/data/config.json
+/usr/share/tkl-actual-bootstrap/VERSION
 
 Health & verify
 ---------------
@@ -55,6 +61,7 @@ Open:
   https://<instance>-budgetapp.<domain>/health/upstream -> 200/404 expected
 Run:
   actualctl doctor   (checks services, ports, nginx -t, upstream)
+  actualctl doctor --fix   (also installs/refreshes package VERSION manifest)
 
 Troubleshooting
 ---------------

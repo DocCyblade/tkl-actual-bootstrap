@@ -7,6 +7,10 @@ Goal:
 - Standardize Nginx/systemd layout with templates
 
 Steps:
+
+Pre-checks (recommended):
+- ./scripts/bootstrap.sh --version
+- actualctl --version
 1) Back up:
    /etc/nginx/sites-available/*actual*
    /etc/systemd/system/*actual*
@@ -15,11 +19,17 @@ Steps:
 2) Stop old services; note previous ports/domains.
 
 3) Install new bundle; run bootstrap (dry-run, then live).
+   Preview:
+     ./scripts/bootstrap.sh --dry-run --domain example.com [--install-version vX.Y.Z]
+   Live (non-interactive):
+     ./scripts/bootstrap.sh -y --domain example.com [--install-version vX.Y.Z]
+   Note: when passing --domain, include --yes (live) or --dry-run (preview).
 
 4) Restore data archives if needed:
    actualctl restore production /srv/backups/production-YYYYMMDD-HHMMSS.tgz
 
 5) Validate:
    actualctl doctor
+   actualctl doctor --fix
    nginx -t
-   open health endpoints
+   open https://<instance>-budgetapp.<domain>/healthz and /health/upstream

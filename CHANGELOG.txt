@@ -1,10 +1,36 @@
 CHANGELOG (cumulative)
 ======================
 
+
 Project: tkl-actual-bootstrap
 License: GNU GPL v3
 Author : Ken Robinson <ken@turnkeylinux.org>
 Source : https://github.com/DocCyblade/tkl-actual-bootstrap
+
+WHAT’S NEW — v0.24.1
+-----------------------
+- CLI & Flags
+  - bootstrap.sh: **--install-version <vX.Y.Z>** replaces `--version <ver>` to choose the Actual Sync Server version.
+  - `--version` (no arg) now prints **script <Script-Version> (package <PKG_VERSION>)** in both scripts.
+
+- Dynamic versioning
+  - Both scripts resolve the package version from ENV/`./VERSION`/`/usr/share/tkl-actual-bootstrap/VERSION`/git tag, with header fallback.
+  - Banners now show both **script** and **package** versions.
+
+- Doctor remediation
+  - `actualctl doctor --fix` installs/refreshes the system package manifest at `/usr/share/tkl-actual-bootstrap/VERSION`.
+
+- Packaging
+  - `bootstrap.sh` installs the package `VERSION` manifest to `/usr/share/tkl-actual-bootstrap/VERSION`.
+
+- Docs/headers
+  - Synchronized headers across README, scripts, systemd, and nginx templates; standardized Packaged-In/Compat where applicable.
+  - Plain‑text docs are canonical (`*.txt`).
+
+- Notes
+  - **Breaking change:** `--version <ver>` removed from `bootstrap.sh`; use `--install-version <ver>`.
+  - See per-script history below for details.
+
 
 1) WHAT’S NEW — v0.23.3
 -----------------------
@@ -37,6 +63,7 @@ WHAT’S NEW — v0.23.2
 
 2) scripts/bootstrap.sh — full history (newest → oldest)
 --------------------------------------------------------
+- v0.24.1  Flags: `--install-version` replaces `--version <ver>`; dynamic version helpers and banner; installs VERSION manifest to /usr/share/tkl-actual-bootstrap/VERSION; usage/help updated.
 - v0.23.3  Docs-only: headers synced to v0.23.3; references to CHANGELOG.txt/README.txt; no behavior change.
 - v0.23.2  Default-install actualctl; domain flag guard; hardened systemd units; health endpoints; CI/package tidy; plain-text docs.
 - v0.23.1  Documentation pass only (plain-text conversion); no functional changes.
@@ -73,6 +100,7 @@ WHAT’S NEW — v0.23.2
 
 3) scripts/actualctl — full history (newest → oldest)
 -----------------------------------------------------
+- v0.24.1  Dynamic `--version` output (script/package); new `doctor --fix` to install/refresh VERSION manifest; banner/help updates; `instance add --from` now falls back to `cp -a` if `rsync` is missing.
 - v0.23.3  Docs-only: headers synced to v0.23.3; references to CHANGELOG.txt/README.txt; no behavior change.
 - v0.23.2  list shows only /srv/app/v* dirs; hides symlinks and npm files; banners & quick-usage harmonized; help synced with docs.
 - v0.23.1  Documentation pass only (plain-text conversion); no functional changes.

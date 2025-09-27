@@ -1,4 +1,4 @@
-Nginx vhosts  (v0.23.2)
+Nginx vhosts
 =======================
 
 Template:
@@ -12,6 +12,11 @@ Health:
   /healthz         -> static nginx-only 200
   /health/upstream -> proxies to backend root (expect 200/404)
 
+CLI checks:
+  actualctl health [INSTANCE]
+  actualctl doctor            (runs nginx -t among other checks)
+  actualctl doctor --fix      (also installs/refreshes package VERSION manifest)
+
 WebSockets:
   Upgrade headers included on "/"
 
@@ -22,6 +27,11 @@ Rendered by bootstrap:
   /etc/nginx/sites-available/<instance>-budgetapp.conf
   /etc/nginx/sites-enabled/<instance>-budgetapp.conf (symlink)
   /etc/actual-budget/env (BUDGET_DOMAIN=example.com)
+
+Default hostnames:
+  development-budgetapp.<domain>
+  test-budgetapp.<domain>
+  production-budgetapp.<domain>
 
 Validate:
   nginx -t && systemctl reload nginx
