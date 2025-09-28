@@ -1,4 +1,4 @@
-scripts/actualctl — README  (v0.25.0)
+scripts/actualctl — README  (v1.0.0-rc1)
 =====================================
 
 Purpose
@@ -24,6 +24,7 @@ Version / app mgmt
 fetch <vX.Y.Z>       Install @actual-app/sync-server@<ver> into /srv/app/<ver>
 switch <INST> <VER>  /srv/app/<INST> -> /srv/app/<VER>, then restart service
 verify <vX.Y.Z>      Install to a temp dir, smoke-check presence, cleanup (no changes to live instances)
+prune-versions [--dry-run] [--keep N] [--older-than DAYS]  Remove unused /srv/app/v* (not targeted by any instance link)
 
 Backups
 -------
@@ -66,6 +67,9 @@ actualctl verify v25.7.1
 actualctl service production restart
 actualctl logs production 200
 actualctl prune-backups --keep 10
+actualctl prune-versions --dry-run
+actualctl prune-versions --keep 2
+actualctl prune-versions --keep 2 --older-than 14
 
 Notes
 -----

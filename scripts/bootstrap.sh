@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/bootstrap.sh
-# Version: v0.25.0
+# Version: v1.0.0-rc1
 # Script-Version : v1.10.5
-# Packaged-In    : v0.25.0
-# Package-Compat : >=v0.25.0 <v0.26.0
-# Last-Reviewed  : 2025-09-27 with package v0.25.0
+# Packaged-In    : v1.0.0-rc1
+# Package-Compat : >=v1.0.0-rc1 <v1.1.0
+# Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Summary:

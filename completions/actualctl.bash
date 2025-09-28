@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
 # Bash completion for: actualctl
@@ -28,7 +26,7 @@ _actualctl()
     version --version
     list check env health doctor
     fetch switch verify
-    backup restore prune-backups
+    backup restore prune-backups prune-versions
     instance service logs
   )
   local inst_sub=(add rm set-port)
@@ -99,6 +97,20 @@ _actualctl()
       else
         COMPREPLY=( $(compgen -W "--keep" -- "$cur") )
       fi
+      ;;
+    prune-versions)
+      # actualctl prune-versions [--dry-run] [--keep N] [--older-than DAYS]
+      case "$prev" in
+        --keep)
+          COMPREPLY=( $(compgen -W "1 2 3 5 7 10" -- "$cur") )
+          ;;
+        --older-than)
+          COMPREPLY=( $(compgen -W "7 14 21 30 60 90" -- "$cur") )
+          ;;
+        *)
+          COMPREPLY=( $(compgen -W "--dry-run --keep --older-than" -- "$cur") )
+          ;;
+      esac
       ;;
 
     instance)

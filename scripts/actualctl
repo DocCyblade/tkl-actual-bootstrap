@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
-# Version: v0.25.0
-# Script-Version : v1.10.4
-# Packaged-In    : v0.25.0
-# Package-Compat : >=v0.25.0 <v0.26.0
-# Last-Reviewed  : 2025-09-27 with package v0.25.0
+# Version: v1.0.0-rc1
+# Script-Version : v1.10.5
+# Packaged-In    : v1.0.0-rc1
+# Package-Compat : >=v1.0.0-rc1 <v1.1.0
+# Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Summary:
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.10.5: add prune-versions to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS.
 #   - Dynamic versioning: --version now prints "script <Script-Version> (package <PKG_VERSION>)"
 #   - Doctor remediation: new 'doctor --fix' installs/refreshes the system VERSION manifest
 #   - Docs: updated usage/help text
@@ -129,6 +130,7 @@ Version & app mgmt:
   fetch <vX.Y.Z>              Install @actual-app/sync-server@<ver> into /srv/app/<ver>
   switch <INSTANCE> <vX.Y.Z>  Point /srv/app/<INSTANCE> -> /srv/app/<ver>, restart service
   verify <vX.Y.Z>             Install to a temp dir and run a smoke check, then remove
+  prune-versions [--dry-run] [--keep N] [--older-than DAYS]  Remove unused /srv/app/v* (not targeted by any instance link)
 
 Backups:
   backup <INSTANCE> [note]    Tar user-data to /srv/backups/<instance>-<ts>[-note].tgz
@@ -478,6 +480,105 @@ cmd_prune_backups() {
   log "prune-backups: keep=${keep}"
 }
 
+cmd_prune_versions() {
+  # Remove unused /srv/app/v* versions, with optional keep/age filters
+  require_root
+  local dry=0 keep=0 older=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1; shift;;
+      --keep)    keep="${2:-0}"; shift 2;;
+      --older-than) older="${2:-0}"; shift 2;;
+      *) err "Unknown option: $1"; return 2;;
+    esac
+  done
+
+  # Discover installed versions
+  shopt -s nullglob
+  local installed=() d base
+  for d in "${BASE_APP}"/v*; do
+    [[ -d "$d" ]] || continue
+    base="$(basename "$d")"
+    [[ "$base" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    installed+=("$base")
+  done
+  shopt -u nullglob
+
+  # Discover versions in use (targets of instance links)
+  local used=() inst link tgt ver
+  while IFS= read -r inst; do
+    link="${BASE_APP}/${inst}"
+    if [[ -L "$link" ]]; then
+      tgt="$(readlink -f "$link")"
+      ver="$(basename "$tgt")"
+      used+=("$ver")
+    fi
+  done < <(discover_instances)
+
+  # Compute unused = installed - used
+  local ulist=" ${used[*]} " unused=() v
+  for v in "${installed[@]}"; do
+    [[ " $ulist " == *" $v "* ]] || unused+=("$v")
+  done
+
+  if ((${#unused[@]} == 0)); then
+    log "prune-versions: nothing to prune (no unused versions)"
+    return 0
+  fi
+
+  # Start with unused as candidates
+  local candidates=("${unused[@]}")
+
+  # Apply --keep N: keep N most-recent by version (descending)
+  if (( keep > 0 )); then
+    local sorted=() keepers=() tmp=()
+    mapfile -t sorted < <(printf "%s\n" "${candidates[@]}" | sort -Vr)
+    keepers=("${sorted[@]:0:keep}")
+    local kset=" ${keepers[*]} "
+    for v in "${candidates[@]}"; do
+      [[ " $kset " == *" $v "* ]] || tmp+=("$v")
+    done
+    candidates=("${tmp[@]}")
+  fi
+
+  # Apply --older-than DAYS: only prune versions older than threshold (by dir mtime)
+  if (( older > 0 )); then
+    local now age filt=()
+    now="$(date +%s)"
+    for v in "${candidates[@]}"; do
+      local path="${BASE_APP}/${v}" mtime=0
+      # GNU stat (%Y) fallback to BSD stat (-f %m)
+      mtime="$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || echo 0)"
+      if [[ "$mtime" =~ ^[0-9]+$ ]] && (( mtime > 0 )); then
+        age=$(( (now - mtime) / 86400 ))
+        (( age >= older )) && filt+=("$v")
+      else
+        # If we can't read mtime, be conservative: include it for pruning
+        filt+=("$v")
+      fi
+    done
+    candidates=("${filt[@]}")
+  fi
+
+  if ((${#candidates[@]} == 0)); then
+    log "prune-versions: nothing matches filters (keep=${keep}, older-than=${older})"
+    return 0
+  fi
+
+  printf "prune-versions: installed=%d used=%d unused=%d prune=%d\n" \
+    "${#installed[@]}" "${#used[@]}" "${#unused[@]}" "${#candidates[@]}"
+
+  for v in "${candidates[@]}"; do
+    local path="${BASE_APP}/${v}"
+    if (( dry )); then
+      echo "[dry-run] rm -rf '$path'"
+    else
+      rm -rf "$path"
+      log "removed: $path"
+    fi
+  done
+}
+
 # Render a systemd unit for a given instance (used by instance add)
 _unit_text() {
   local inst="$1"
@@ -759,6 +860,7 @@ case "${1:-}" in
   backup)         shift; cmd_backup "$@";;
   restore)        shift; cmd_restore "$@";;
   prune-backups)  shift; cmd_prune_backups "$@";;
+  prune-versions)  shift; cmd_prune_versions "$@";;
 
   instance)
     shift

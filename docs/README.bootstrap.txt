@@ -1,4 +1,4 @@
-scripts/bootstrap.sh — README  (v0.25.0)
+scripts/bootstrap.sh — README  (v1.0.0-rc1)
 ========================================
 
 Purpose
@@ -19,6 +19,7 @@ Install a specific version (preview):
 Notes:
 - If you pass --domain, you must also pass --yes (live) or --dry-run (preview).
 - If omitted, bootstrap prompts (or defaults to example.com when -y is used).
+- Installer validates --install-version against npm and performs an atomic install via a temp build dir (no leftover dirs on failure).
 
 What it does
 ------------
