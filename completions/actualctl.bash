@@ -24,12 +24,12 @@ _actualctl()
   local cmds=(
     help --help -h
     version --version
-    list check env health doctor
+    list check env health doctor status
     fetch switch verify list-versions --check-for-updates
     backup restore prune-backups prune-versions
     instance service logs
   )
-  local inst_sub=(add rm set-port)
+  local inst_sub=(add rm set-port set-domain)
   local svc_ops=(start stop restart status)
 
   # Dynamic candidates (no side-effects)
@@ -124,13 +124,13 @@ _actualctl()
       esac
       ;;
     instance)
-      # actualctl instance <add|rm|set-port> ...
+      # actualctl instance <add|rm|set-port|set-domain> ...
       if (( cword == 2 )); then
         COMPREPLY=( $(compgen -W "${inst_sub[*]}" -- "$cur") )
       else
         case "${words[2]}" in
           add)
-            # actualctl instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT] [--no-start] [--force]
+            # actualctl instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT] [--domain FQDN] [--no-start] [--force]
             case $cword in
               3) ;; # free-form NAME
               4) COMPREPLY=( $(compgen -W "$versions development test production" -- "$cur") ) ;;
@@ -142,8 +142,11 @@ _actualctl()
                   --port)
                     COMPREPLY=( $(compgen -W "5001 5002 5003 5004 5005 5010 5012" -- "$cur") )
                     ;;
+                  --domain)
+                    COMPREPLY=()
+                    ;;
                   *)
-                    COMPREPLY=( $(compgen -W "--from --port --no-start --force" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "--from --port --domain --no-start --force" -- "$cur") )
                     ;;
                 esac
                 ;;
@@ -162,6 +165,17 @@ _actualctl()
             if (( cword == 3 )); then
               COMPREPLY=( $(compgen -W "$instances" -- "$cur") )
             fi
+            ;;
+          set-domain)
+            # actualctl instance set-domain <NAME> <FQDN|none>
+            case $cword in
+              3)
+                COMPREPLY=( $(compgen -W "$instances" -- "$cur") )
+                ;;
+              4)
+                COMPREPLY=( $(compgen -W "none" -- "$cur") )
+                ;;
+            esac
             ;;
         esac
       fi
