@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.10.9
+# Script-Version : v1.11.0
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.11.0: instance add supports --domain & writes per-instance Nginx site (HTTP only; no LE). New `instance set-domain` to change/clear domain. health` now honors per-instance public_domain. `instance rm` removes the site.
 #   - v1.10.9: instance add gains --no-start and --force; validates --port (numeric) and checks for in-use ports (can override with --force).
 #   - v1.10.8: list-versions marks already installed releases (bold when TTY; otherwise '** ' prefix) and appends [installed].
 #   - v1.10.7: add --check-for-updates (stable only) to compare latest npm version vs locally installed; suggests verify/fetch.
@@ -145,16 +146,20 @@ Backups:
   prune-backups [--keep N]    Keep N most-recent per instance (default: 7)
 
 Instances:
-  instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT] [--no-start] [--force]
+  instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT] [--domain FQDN] [--no-start] [--force]
                               Create /srv/<NAME>/data (optionally copy from SRC),
                               create unit, link /srv/app/<NAME> -> target, start.
                               If --port omitted, picks next free port automatically.
+                              --domain FQDN: create per-instance Nginx site for this domain (HTTP only; bring your own TLS if desired)
                               --no-start: create unit but do not enable/start it
                               --force:    overwrite non-empty target when using --from; ignore port-in-use check
   instance rm  <NAME> [--purge]
-                              Stop/disable unit, remove unit, (optional) delete /srv/<NAME>
+                              Stop/disable unit, remove unit, (optional) delete /srv/<NAME>;
+                              also removes any per-instance Nginx site.
   instance set-port <NAME> <PORT>
                               Update /srv/<NAME>/data/config.json port and restart service
+  instance set-domain <NAME> <FQDN|none>
+                              Write/remove a per-instance Nginx site and update config.json public_domain; reload Nginx
 
 Service wrappers:
   service <INSTANCE> start|stop|restart|status
@@ -357,6 +362,73 @@ pick_next_port() {
   return 1
 }
 
+# Create/update a simple per-instance Nginx site (HTTP only). Caller must be root.
+write_nginx_site() {
+  local inst="$1" domain="$2" port="$3"
+  [[ -n "$inst" && -n "$domain" && -n "$port" ]] || { err "write_nginx_site: missing args"; return 2; }
+
+  local avail="/etc/nginx/sites-available/${inst}-budgetapp.conf"
+  local enabled="/etc/nginx/sites-enabled/${inst}-budgetapp.conf"
+
+  install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled
+
+  cat <<'CONF' > "$avail"
+server {
+    listen 80;
+    server_name __SERVER_NAME__;
+    access_log /var/log/nginx/__INST__.access.log;
+    error_log  /var/log/nginx/__INST__.error.log;
+
+    # Upstream health endpoint explicitly returns 200 for CLI checks
+    location /health/upstream {
+        return 200;
+    }
+
+    location / {
+        proxy_pass         http://127.0.0.1:__PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}
+CONF
+
+  # Fill in placeholders safely
+  sed -i "s/__SERVER_NAME__/${domain//\//\\/}/g" "$avail"
+  sed -i "s/__PORT__/${port}/g" "$avail"
+  sed -i "s/__INST__/${inst//\//\\/}/g" "$avail"
+
+  ln -sfn "$avail" "$enabled"
+
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx
+    log "nginx: site enabled for ${inst} (${domain} -> 127.0.0.1:${port})"
+  else
+    rm -f "$enabled"
+    err "nginx -t failed; site not enabled for ${inst}"
+    return 1
+  fi
+}
+
+# Remove the per-instance Nginx site if present. Caller must be root.
+remove_nginx_site() {
+  local inst="$1"
+  [[ -n "$inst" ]] || { err "remove_nginx_site: missing instance"; return 2; }
+  local avail="/etc/nginx/sites-available/${inst}-budgetapp.conf"
+  local enabled="/etc/nginx/sites-enabled/${inst}-budgetapp.conf"
+
+  rm -f "$enabled" "$avail"
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx
+    log "nginx: site removed for ${inst}"
+  else
+    warn "nginx -t failed after removal; check configuration"
+  fi
+}
+
 # ───────────────────────────────────────────────────────────────────────────────
 # Commands
 # ───────────────────────────────────────────────────────────────────────────────
@@ -420,10 +492,10 @@ cmd_env() {
   local link="${BASE_APP}/${inst}"
   local ver="(none)"
   [[ -L "$link" ]] && ver="$(basename "$(readlink -f "$link")")"
-  local port host; port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"
+  local port host pdom; port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"; pdom="$(json_get "$cfg" public_domain)"
 
-  printf "%s:\n  ACTUAL_DATA_DIR=%s\n  config=%s (port=%s host=%s)\n  app_link=%s -> %s\n" \
-    "$inst" "$dat" "$cfg" "${port:-?}" "${host:-?}" "$link" "$ver"
+  printf "%s:\n  ACTUAL_DATA_DIR=%s\n  config=%s (port=%s host=%s public_domain=%s)\n  app_link=%s -> %s\n" \
+    "$inst" "$dat" "$cfg" "${port:-?}" "${host:-?}" "${pdom:--}" "$link" "$ver"
 }
 
 cmd_fetch() {
@@ -520,7 +592,8 @@ cmd_list_versions() {
       (( i > 0 )) && printf ','
       printf '"%s"' "${versions[i]}"
     done
-    printf ']\\n'
+    printf ']\n'
+
   else
     # Human list with markers for installed versions
     # Discover installed versions under /srv/app (strip leading 'v')
@@ -743,9 +816,10 @@ cmd_instance_add() {
   # Create a new instance, optionally copying data and/or choosing a port
   require_root
 
-  local name="${1:-}" target="${2:-}" fromInst="" want_port="" no_start=0 force=0
+  local name="${1:-}" target="${2:-}" fromInst="" want_port="" dom="" no_start=0 force=0
+
   [[ -n "$name" && -n "$target" ]] \
-    || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC] [--port PORT] [--no-start] [--force]"
+    || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC] [--port PORT] [--domain FQDN] [--no-start] [--force]"
   shift 2
 
   # Parse optional flags
@@ -755,6 +829,7 @@ cmd_instance_add() {
       --port)     want_port="${2:-}"; shift 2;;
       --no-start) no_start=1; shift;;
       --force)    force=1; shift;;
+      --domain)  dom="${2:-}"; shift 2;;
       *) err "Unknown option: $1"; return 2;;
     esac
   done
@@ -815,12 +890,23 @@ cmd_instance_add() {
     port="$(pick_next_port || true)"
     [[ -n "$port" ]] || die "Unable to find an available port"
   fi
-  {
-    echo "{"
-    echo "  \"port\": ${port},"
-    echo "  \"hostname\": \"${host}\""
-    echo "}"
-  } > "$cfg"
+
+  if [[ -n "$dom" ]]; then
+    cat > "$cfg" <<EOF
+{
+  "port": ${port},
+  "hostname": "${host}",
+  "public_domain": "${dom}"
+}
+EOF
+  else
+    cat > "$cfg" <<EOF
+{
+  "port": ${port},
+  "hostname": "${host}"
+}
+EOF
+  fi
   chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
 
   # Install and start systemd unit
@@ -831,6 +917,11 @@ cmd_instance_add() {
     log "instance add: created unit ${name}-budgetapp.service (not enabled/started; use: systemctl enable --now ${name}-budgetapp.service)"
   else
     systemctl enable --now "${name}-budgetapp.service"
+  fi
+
+  # Optional: create per-instance Nginx site for the provided domain (HTTP only)
+  if [[ -n "$dom" ]]; then
+    write_nginx_site "$name" "$dom" "$port" || warn "failed to enable nginx site for ${name}"
   fi
 
   log "instance add: $name -> $(basename "$tgt")"
@@ -847,6 +938,9 @@ cmd_instance_rm() {
   systemctl disable --now "${name}-budgetapp.service" || true
   rm -f "/etc/systemd/system/${name}-budgetapp.service"
   systemctl daemon-reload
+  
+  # Remove per-instance Nginx site if present
+  remove_nginx_site "$name" || true
 
   rm -f "${BASE_APP}/${name}"
   if (( purge )); then
@@ -865,22 +959,67 @@ cmd_instance_set_port() {
 
   local dat="/srv/${name}/data" cfg="${dat}/config.json"
   [[ -d "$dat" ]] || die "Instance data dir not found: $dat"
-  local host; host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
+  local host pdom; host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
+  pdom="$(json_get "$cfg" public_domain)"
 
   local tmp; tmp="$(mktemp)"
-  {
-    echo "{"
-    echo "  \"port\": ${newp},"
-    echo "  \"hostname\": \"${host}\""
-    echo "}"
-  } > "$tmp"
+  if [[ -n "$pdom" ]]; then
+    cat > "$tmp" <<EOF
+{
+  "port": ${newp},
+  "hostname": "${host}",
+  "public_domain": "${pdom}"
+}
+EOF
+  else
+    cat > "$tmp" <<EOF
+{
+  "port": ${newp},
+  "hostname": "${host}"
+}
+EOF
+  fi
 
-  install -m 0644 "$tmp" "$cfg"
-  rm -f "$tmp"
-
+  install -m 0644 "$tmp" "$cfg"; rm -f "$tmp"
   chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
   systemctl restart "${name}-budgetapp.service"
   log "instance set-port: ${name} -> ${newp}"
+}
+
+cmd_instance_set_domain() {
+  require_root
+  local name="${1:-}" fqdn="${2:-}"
+  [[ -n "$name" && -n "$fqdn" ]] || die "Usage: actualctl instance set-domain <NAME> <FQDN|none>"
+
+  local dat="/srv/${name}/data" cfg="${dat}/config.json"
+  [[ -d "$dat" ]] || die "Instance data dir not found: $dat"
+  local port host; port="$(json_get "$cfg" port)"; [[ -n "$port" ]] || die "Missing port in $cfg"
+  host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
+
+  local tmp; tmp="$(mktemp)"
+  if [[ "$fqdn" == "none" || "$fqdn" == "-" ]]; then
+    cat > "$tmp" <<EOF
+{
+  "port": ${port},
+  "hostname": "${host}"
+}
+EOF
+    remove_nginx_site "$name" || true
+    log "instance set-domain: ${name} domain cleared"
+  else
+    cat > "$tmp" <<EOF
+{
+  "port": ${port},
+  "hostname": "${host}",
+  "public_domain": "${fqdn}"
+}
+EOF
+    write_nginx_site "$name" "$fqdn" "$port" || warn "failed to enable nginx site for ${name}"
+    log "instance set-domain: ${name} -> ${fqdn}"
+  fi
+
+  install -m 0644 "$tmp" "$cfg"; rm -f "$tmp"
+  chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
 }
 
 cmd_service() {
@@ -905,7 +1044,7 @@ _curl_code() {
 
 cmd_health() {
   # Upstream (Nginx) + backend (localhost:port) health
-  local inst="${1:-}" domain; domain="$(read_domain || true)"
+  local inst="${1:-}" bootstrap_domain; bootstrap_domain="$(read_domain || true)"
   local rc=0
 
   if [[ -z "$inst" ]]; then
@@ -914,15 +1053,25 @@ cmd_health() {
     return 0
   fi
 
-  local cfg="/srv/${inst}/data/config.json" port
+  local cfg="/srv/${inst}/data/config.json" port pdom
   port="$(json_get "$cfg" port)"
+  pdom="$(json_get "$cfg" public_domain)"
   [[ -n "$port" ]] || { err "health: no port in $cfg"; return 1; }
 
-  if [[ -n "$domain" ]]; then
-    local host up code
-    host="${inst}-budgetapp.${domain}"
-    up="https://${host}/health/upstream"
-    code="$(_curl_code "$up")"
+  # Prefer per-instance public_domain (HTTP), else use bootstrap domain pattern over HTTPS
+  if [[ -n "$pdom" ]]; then
+    local up="http://${pdom}/health/upstream"
+    local code="$(_curl_code "$up")"
+    if [[ "$code" == "200" ]]; then
+      log "health: upstream OK (${inst}) 200 ${up}"
+    else
+      err "health: upstream FAIL (${inst}) code=${code:-NA} ${up}"
+      rc=1
+    fi
+  elif [[ -n "$bootstrap_domain" ]]; then
+    local host="${inst}-budgetapp.${bootstrap_domain}"
+    local up="https://${host}/health/upstream"
+    local code="$(_curl_code "$up")"
     if [[ "$code" == "200" ]]; then
       log "health: upstream OK (${inst}) 200 ${up}"
     else
@@ -930,7 +1079,7 @@ cmd_health() {
       rc=1
     fi
   else
-    warn "health: domain not set in /etc/actual-budget/env; skipping upstream check for ${inst}"
+    warn "health: no domain configured; skipping upstream check for ${inst}"
   fi
 
   local be="http://127.0.0.1:${port}/" bcode
@@ -1032,6 +1181,7 @@ case "${1:-}" in
       add)       shift; cmd_instance_add "$@";;
       rm)        shift; cmd_instance_rm "$@";;
       set-port)  shift; cmd_instance_set_port "$@";;
+      set-domain)  shift; cmd_instance_set_domain "$@";;
       *) err "Unknown: instance ${1:-}"; usage_quick; exit 2;;
     esac
     ;;

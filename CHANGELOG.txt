@@ -1,3 +1,20 @@
+WHAT’S NEW — v1.0.0-rc1
+-----------------------
+- Versioning & compatibility
+  - Package set to **v1.0.0-rc1**; compat **>=v1.0.0-rc1 <v1.1.0**.
+- CLI
+  - New `actualctl prune-versions` to remove unused `/srv/app/v*` directories (not targeted by any instance link).
+    Supports `--dry-run`, `--keep N`, and `--older-than DAYS`.
+- Installer safety
+  - `bootstrap.sh` validates `--install-version` via npm preflight, and performs atomic installs via a temp build dir (no leftovers on failure).
+- UX
+  - Banners default to ASCII lines; opt-in UTF‑8 via `USE_UTF8_BANNER=1` (still respects `NO_COLOR` and only applies on a TTY).
+- Completions/docs
+  - Bash completions installed to `/etc/bash_completion.d/` for both `actualctl` and `bootstrap.sh`.
+  - Plain-text docs installed to `/usr/share/tkl-actual-bootstrap/docs/`.
+- Defaults
+  - Default Actual Sync Server remains **v25.7.1**.
+
 WHAT’S NEW — v0.25.0
 -----------------------
 - Update/refresh workflow
@@ -119,6 +136,7 @@ WHAT’S NEW — v0.23.2
 
 3) scripts/actualctl — full history (newest → oldest)
 -----------------------------------------------------
+- v1.10.5  New "prune-versions" to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS; header sync for v1.0.0-rc1.
 - v1.10.4  Banner defaults to ASCII; opt‑in UTF‑8 with USE_UTF8_BANNER=1; respects NO_COLOR/TTY; header sync.
 - v1.10.3  Verify: nounset‑safe cleanup trap; accepts versions with or without a leading `v`; prefers system VERSION manifest over local; additional `set -u` fixes; adaptive banner.
 - v1.10.2  Removed unrequested `open` subcommand; split combined `local` declarations to avoid nounset errors; adaptive banner; help trimmed to point at docs.
