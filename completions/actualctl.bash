@@ -20,12 +20,12 @@ _actualctl()
     cword=$COMP_CWORD
   fi
 
-  # Top-level commands (keep in sync with scripts/actualctl)
+  # Top-level commands & global options (keep in sync with scripts/actualctl)
   local cmds=(
     help --help -h
     version --version
     list check env health doctor
-    fetch switch verify list-versions check-updates
+    fetch switch verify list-versions --check-for-updates
     backup restore prune-backups prune-versions
     instance service logs
   )
@@ -122,10 +122,6 @@ _actualctl()
           COMPREPLY=( $(compgen -W "--limit --pre --json" -- "$cur") )
           ;;
       esac
-      ;;
-    check-updates)
-      # actualctl check-updates [--pre]
-      COMPREPLY=( $(compgen -W "--pre" -- "$cur") )
       ;;
     instance)
       # actualctl instance <add|rm|set-port> ...

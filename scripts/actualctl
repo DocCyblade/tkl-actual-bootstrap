@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.10.6
+# Script-Version : v1.10.7
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.10.7: add --check-for-updates (stable only) to compare latest npm version vs locally installed; suggests verify/fetch.
 #   - v1.10.6: add list-versions (list npm versions; default last 10 stable); flags: --limit N, --pre, --json.
 #   - v1.10.5: add prune-versions to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS.
 #   - Dynamic versioning: --version now prints "script <Script-Version> (package <PKG_VERSION>)"
@@ -133,6 +134,7 @@ Version & app mgmt:
   verify <vX.Y.Z>             Install to a temp dir and run a smoke check, then remove
   list-versions [--limit N] [--pre] [--json]
                                 List available versions from npm (default: last 10 stable)
+  --check-for-updates         Check npm for a newer stable release than installed locally
   prune-versions [--dry-run] [--keep N] [--older-than DAYS]  Remove unused /srv/app/v* (not targeted by any instance link)
 
 Backups:
@@ -157,6 +159,52 @@ Service wrappers:
 Full Examples see docs/README.actualctl.txt
 
 HELP
+}
+cmd_check_for_updates() {
+  # Compare latest stable npm version vs what's installed locally under /srv/app
+  require_root
+  local latest
+  mapfile -t _vers < <(npm_versions_lines | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr)
+  if ((${#_vers[@]} == 0)); then
+    err "Could not retrieve versions from npm"
+    return 1
+  fi
+  latest="${_vers[0]}"
+
+  # Installed versions under /srv/app (strip leading 'v')
+  local installed=() d base
+  shopt -s nullglob
+  for d in "${BASE_APP}"/v*; do
+    [[ -d "$d" ]] || continue
+    base="$(basename "$d")"
+    [[ "$base" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    installed+=("${base#v}")
+  done
+  shopt -u nullglob
+
+  local latest_installed=""
+  if (( ${#installed[@]} )); then
+    latest_installed="$(printf '%s\n' "${installed[@]}" | sort -Vr | head -n1)"
+  fi
+
+  printf "Latest available (stable): v%s\n" "$latest"
+  if [[ -n "$latest_installed" ]]; then
+    printf "Latest installed: v%s\n" "$latest_installed"
+    if [[ "$latest" != "$latest_installed" ]]; then
+      printf "Newer version available: v%s (installed: v%s)\n" "$latest" "$latest_installed"
+      printf "Suggested:\n"
+      printf "  actualctl verify v%s && actualctl fetch v%s\n" "$latest" "$latest"
+      printf "  # then switch desired instances, e.g.: actualctl switch production v%s\n" "$latest"
+      return 10
+    else
+      printf "Up-to-date. No newer stable release than v%s.\n" "$latest_installed"
+      return 0
+    fi
+  else
+    printf "No versions installed locally.\n"
+    printf "Suggested:\n  actualctl verify v%s && actualctl fetch v%s\n" "$latest" "$latest"
+    return 11
+  fi
 }
 
 # If no args, show quick usage (consistent with project UX)
@@ -910,6 +958,7 @@ case "${1:-}" in
   switch)         shift; cmd_switch "$@";;
   verify)         shift; cmd_verify "$@";;
   list-versions)  shift; cmd_list_versions "$@";;
+  --check-for-updates) shift; cmd_check_for_updates "$@";;
 
   backup)         shift; cmd_backup "$@";;
   restore)        shift; cmd_restore "$@";;
