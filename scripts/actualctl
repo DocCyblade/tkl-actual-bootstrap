@@ -325,22 +325,33 @@ npm_versions_lines() {
 # Discover instances: include well-known + any /srv/* that has data/.
 # Keep output stable by sorting additions.
 discover_instances() {
-  local seen=" development test production "
-  local out=(development test production)
-  local d n add=()
+  # Instances are those that actually exist: either /srv/<name>/data present
+  # or a symlink under /srv/app/<name> (excluding version dirs vX.Y.Z).
+  local out=() d n seen=" "
 
+  # 1) Data-backed instances
   for d in /srv/*; do
     [[ -d "$d/data" ]] || continue
     n="$(basename "$d")"
-    [[ "$seen" == *" $n "* ]] || add+=("$n")
+    out+=("$n")
+    seen+="$n "
   done
 
-  if ((${#add[@]})); then
-    IFS=$'\n' add=($(printf '%s\n' "${add[@]}" | sort))
+  # 2) Symlinked app targets that look like instance aliases (not versions)
+  shopt -s nullglob
+  for d in "${BASE_APP}"/*; do
+    [[ -L "$d" ]] || continue
+    n="$(basename "$d")"
+    [[ "$n" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
+    [[ " $seen " == *" $n "* ]] || out+=("$n")
+  done
+  shopt -u nullglob
+
+  # Stable, sorted output
+  if ((${#out[@]})); then
+    IFS=$'\n' printf '%s\n' "${out[@]}" | sort
     unset IFS
-    out+=("${add[@]}")
   fi
-  printf '%s\n' "${out[@]}"
 }
 
 # Pick the next available port, starting from 5002 upward, skipping any used
@@ -442,7 +453,8 @@ cmd_list() {
       target="$(basename "$(readlink -f "$link")")"
     fi
     local svc="${inst}-budgetapp.service" state
-    state="$(systemctl is-active "$svc" 2>/dev/null || echo inactive)"
+    state="$(systemctl is-active "$svc" 2>/dev/null || true)"
+    [[ -n "$state" ]] || state="inactive"
     printf "%-12s %-28s %s\n" "$inst" "${target#${BASE_APP}/}" "$state"
   done < <(discover_instances)
 
