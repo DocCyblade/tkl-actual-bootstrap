@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # actualctl Bash Completion
-# Completion-Version : v1.11.0  # keep in sync with scripts/actualctl Script-Version
+# Completion-Version : v1.11.1  # keep in sync with scripts/actualctl Script-Version
 # SPDX-License-Identifier: GPL-3.0-or-later
 # -----------------------------------------------------------------------------
 # Bash completion for: actualctl

@@ -23,9 +23,9 @@ WebSockets:
 HSTS:
   Optional header (comment out if undesired)
 
-Rendered by bootstrap:
-  /etc/nginx/sites-available/<instance>-budgetapp.conf
-  /etc/nginx/sites-enabled/<instance>-budgetapp.conf (symlink)
+Rendered by actualctl (via `instance add` / `set-domain`):
+  /etc/nginx/sites-available/actual-<NAME>.conf
+  /etc/nginx/sites-enabled/actual-<NAME>.conf (symlink)
   /etc/actual-budget/env (BUDGET_DOMAIN=example.com)
 
 Default hostnames:

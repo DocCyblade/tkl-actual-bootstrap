@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/bootstrap.sh
 # Version: v1.0.0-rc1
-# Script-Version : v1.10.5
+# Script-Version : v1.11.0
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -15,6 +15,7 @@
 #   and installs 'actualctl' into PATH by default.
 #
 # Changes since v0.23.3:
+#   - v1.11.0: RC1 simplification — delegate per-instance work to 'actualctl instance add'; docs/completions bumped; no new features (RC1 freeze).
 #   - v1.10.5: preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure).
 #   - v1.10.6: add --instances override to create a custom set of instances with optional per-instance ports; nginx/unit rendering now iterates dynamically; update path discovers existing instances instead of recreating defaults.
 #   - v1.10.7: --instances supports NAME[:PORT][@FQDN]; per-instance FQDN override for Nginx vhosts.
@@ -735,7 +736,7 @@ render_nginx_site() {
   host="${host//$'\t\r\n '}"
   local bundle_dir; bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   local tpl="${bundle_dir}/nginx/templates/vhost.conf.tpl"
-  local out="/etc/nginx/sites-available/${inst}-budgetapp.conf"
+  local out="/etc/nginx/sites-available/actual-${inst}.conf"
   local tmp; tmp="$(mktemp)"
 
   if [[ -f "$tpl" ]]; then
@@ -747,7 +748,7 @@ render_nginx_site() {
 
   copy_if_changed "$tmp" "$out"
   rm -f "$tmp"
-  run "ln -sfn '$out' '/etc/nginx/sites-enabled/${inst}-budgetapp.conf'"
+  run "ln -sfn '$out' '/etc/nginx/sites-enabled/actual-${inst}.conf'"
 }
 
 install_nginx() {
@@ -937,18 +938,27 @@ main() {
     fi
   fi
   install_version "$VERSION"
-  ensure_links "$VERSION"
-  ensure_configs
-  install_version_manifest
-  install_units
-  install_nginx
   install_ctl
+
+  # Delegate instances to actualctl (single source of truth)
+  for inst in "${INSTANCES[@]}"; do
+    host="${DOMAINS[$inst]:-${inst}-budgetapp.${BUDGET_DOMAIN}}"
+    if [[ $DRY_RUN -eq 1 ]]; then
+      printf "[dry-run] %s instance add '%s' '%s' --port '%s' --domain '%s'\n" \
+        "$CTL_DST" "$inst" "$VERSION" "${PORTS[$inst]}" "$host"
+    else
+      "$CTL_DST" instance add "$inst" "$VERSION" --port "${PORTS[$inst]}" --domain "$host"
+    fi
+  done
+
+  install_version_manifest
   install_completions
 
   log "Complete."
   log "Visit:"
   for inst in "${INSTANCES[@]}"; do
-    log "  https://${inst}-budgetapp.$BUDGET_DOMAIN/healthz"
+    host="${DOMAINS[$inst]:-${inst}-budgetapp.$BUDGET_DOMAIN}"
+    log "  https://${host}/healthz"
   done
 }
 

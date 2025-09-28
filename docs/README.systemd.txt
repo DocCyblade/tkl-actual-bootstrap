@@ -5,12 +5,12 @@ Template (in repo):
   systemd/budgetapp.service.tpl
 
 Rendered units (on host):
-  /etc/systemd/system/<instance>-budgetapp.service
+  /etc/systemd/system/<NAME>-budgetapp.service
 
-Lifecycle
----------
-- Units are rendered by bootstrap and enabled/started automatically.
-- When bootstrap updates units, it runs `systemctl daemon-reload` for you.
+- Lifecycle
+----------
+- Units are rendered by **actualctl** (via `instance add`) and enabled/started automatically. Bootstrap delegates this in RC1.
+- When actualctl renders/updates units, it runs `systemctl daemon-reload`. `bootstrap.sh --update-install --with-units` refreshes units for *discovered* instances and runs `daemon-reload` as well.
 - Manual refresh after editing a unit:
   systemctl daemon-reload && systemctl restart <instance>-budgetapp
 

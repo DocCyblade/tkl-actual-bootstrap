@@ -5,13 +5,14 @@ Template:
   configs/config.json.tpl
 
 Rendered to:
-  /srv/<instance>/data/config.json
+  /srv/<NAME>/data/config.json
 
 Template token:
   __PORT__  Replaced with the instance port (e.g., 5000 / 5001 / 5006)
 
 Notes:
   - hostname is fixed to 127.0.0.1 (bind loopback; safe behind Nginx)
+  - owned by budget-server:budget-server (created by actualctl)
 
 Example render:
   For test instance on port 5000:
@@ -22,7 +23,7 @@ Example render:
   }
 
 Note:
-  Pre-rendered per-instance configs are no longer tracked; bootstrap seeds from the template.
+  Pre-rendered per-instance configs are no longer tracked; actualctl seeds from the template when creating an instance (bootstrap delegates in RC1).
 
 Change management:
   - Use: actualctl instance set-port <NAME> <PORT>

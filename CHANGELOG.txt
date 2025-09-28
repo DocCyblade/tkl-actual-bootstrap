@@ -149,6 +149,7 @@ WHAT’S NEW — v0.23.2
 
 3) scripts/actualctl — full history (newest → oldest)
 -----------------------------------------------------
+- v1.11.1  Align nginx site names to actual-<instance>.conf; add /healthz (static) and /health/upstream (proxied); health accepts 200/404.
 - v1.11.0  List shows only existing instances (no default seeding); fixed duplicate "inactive" output; docs/completions sync (add `status` in completion, `set-domain` docs); no breaking changes.
 - v1.10.5  New "prune-versions" to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS; header sync for v1.0.0-rc1.
 - v1.10.4  Banner defaults to ASCII; opt‑in UTF‑8 with USE_UTF8_BANNER=1; respects NO_COLOR/TTY; header sync.
