@@ -25,7 +25,7 @@ _actualctl()
     help --help -h
     version --version
     list check env health doctor
-    fetch switch verify
+    fetch switch verify list-versions check-updates
     backup restore prune-backups prune-versions
     instance service logs
   )
@@ -112,7 +112,21 @@ _actualctl()
           ;;
       esac
       ;;
-
+    list-versions)
+      # actualctl list-versions [--limit N] [--pre] [--json]
+      case "$prev" in
+        --limit)
+          COMPREPLY=( $(compgen -W "10 15 25 50 100" -- "$cur") )
+          ;;
+        *)
+          COMPREPLY=( $(compgen -W "--limit --pre --json" -- "$cur") )
+          ;;
+      esac
+      ;;
+    check-updates)
+      # actualctl check-updates [--pre]
+      COMPREPLY=( $(compgen -W "--pre" -- "$cur") )
+      ;;
     instance)
       # actualctl instance <add|rm|set-port> ...
       if (( cword == 2 )); then

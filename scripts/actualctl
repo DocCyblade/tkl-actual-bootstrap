@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.10.5
+# Script-Version : v1.10.6
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.10.6: add list-versions (list npm versions; default last 10 stable); flags: --limit N, --pre, --json.
 #   - v1.10.5: add prune-versions to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS.
 #   - Dynamic versioning: --version now prints "script <Script-Version> (package <PKG_VERSION>)"
 #   - Doctor remediation: new 'doctor --fix' installs/refreshes the system VERSION manifest
@@ -130,6 +131,8 @@ Version & app mgmt:
   fetch <vX.Y.Z>              Install @actual-app/sync-server@<ver> into /srv/app/<ver>
   switch <INSTANCE> <vX.Y.Z>  Point /srv/app/<INSTANCE> -> /srv/app/<ver>, restart service
   verify <vX.Y.Z>             Install to a temp dir and run a smoke check, then remove
+  list-versions [--limit N] [--pre] [--json]
+                                List available versions from npm (default: last 10 stable)
   prune-versions [--dry-run] [--keep N] [--older-than DAYS]  Remove unused /srv/app/v* (not targeted by any instance link)
 
 Backups:
@@ -247,6 +250,18 @@ json_get() {
         print v
         exit
       }' "$file" 2>/dev/null
+  fi
+}
+
+# Return one version per line from npm (no leading 'v'); prefers jq, falls back to Node
+npm_versions_lines() {
+  local json
+  json="$(as_user "npm view '@actual-app/sync-server' versions --json" 2>/dev/null || true)"
+  [[ -n "$json" ]] || { err "npm: unable to fetch versions"; return 1; }
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$json" | jq -r 'if type=="array" then .[] else .versions[] end' 2>/dev/null
+  else
+    printf '%s' "$json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{let v=JSON.parse(d);if(Array.isArray(v))v.forEach(x=>console.log(x));else if(v&&Array.isArray(v.versions))v.versions.forEach(x=>console.log(x));}catch(e){process.exit(1)}});'
   fi
 }
 
@@ -397,6 +412,7 @@ cmd_switch() {
   log "switch: $inst -> $ver"
 }
 
+
 cmd_verify() {
   # Dry-run install to temp dir (does not affect running instances)
   require_root
@@ -420,6 +436,43 @@ cmd_verify() {
   [[ -d "$tmp/node_modules/@actual-app/sync-server" ]] \
     && log "verify: OK (module present)" \
     || die "verify: install failed"
+}
+
+cmd_list_versions() {
+  # List available versions from npm
+  require_root
+  local limit=10 allow_pre=0 as_json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --limit)      limit="${2:-10}"; shift 2;;
+      --pre)        allow_pre=1; shift;;
+      --json)       as_json=1; shift;;
+      *) err "Unknown option: $1"; return 2;;
+    esac
+  done
+  local versions=()
+  mapfile -t versions < <(npm_versions_lines | { if (( allow_pre )); then cat; else grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; fi; } | sort -Vr)
+  if (( ${#versions[@]} == 0 )); then
+    err "No versions returned from npm"
+    return 1
+  fi
+  # Trim to limit
+  if (( limit > 0 )) && (( ${#versions[@]} > limit )); then
+    versions=("${versions[@]:0:limit}")
+  fi
+  if (( as_json )); then
+    # Print JSON array of plain semver strings
+    printf '['
+    local i
+    for ((i=0;i<${#versions[@]};i++)); do
+      (( i > 0 )) && printf ','
+      printf '"%s"' "${versions[i]}"
+    done
+    printf ']\\n'
+  else
+    # Human list with leading 'v'
+    printf 'v%s\n' "${versions[@]}"
+  fi
 }
 
 cmd_backup() {
@@ -856,6 +909,7 @@ case "${1:-}" in
   fetch)          shift; cmd_fetch "$@";;
   switch)         shift; cmd_switch "$@";;
   verify)         shift; cmd_verify "$@";;
+  list-versions)  shift; cmd_list_versions "$@";;
 
   backup)         shift; cmd_backup "$@";;
   restore)        shift; cmd_restore "$@";;
