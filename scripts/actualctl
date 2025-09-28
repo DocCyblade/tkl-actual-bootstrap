@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v0.25.0
-# Script-Version : v1.10.3
+# Script-Version : v1.10.4
 # Packaged-In    : v0.25.0
 # Package-Compat : >=v0.25.0 <v0.26.0
 # Last-Reviewed  : 2025-09-27 with package v0.25.0
@@ -17,6 +17,7 @@
 #   - Dynamic versioning: --version now prints "script <Script-Version> (package <PKG_VERSION>)"
 #   - Doctor remediation: new 'doctor --fix' installs/refreshes the system VERSION manifest
 #   - Docs: updated usage/help text
+#   - v1.10.4: banner defaults to ASCII; opt-in UTF-8 line when USE_UTF8_BANNER=1; still respects NO_COLOR and TTY only.
 #   - v1.10.3: verify trap is nounset-safe; accepts 'v'-prefixed versions (strips 'v' for npm install).
 #
 # License: GNU GPL v3
@@ -71,13 +72,19 @@ SCRIPT_VERSION="$(_script_version)"
 # Pretty banner + basic help
 # ───────────────────────────────────────────────────────────────────────────────
 banner() {
-  # Detect width, UTF-8 capability, and whether stdout is a TTY
-  local cols utf8=0 tty=0 dash line
+  # Detect width and whether stdout is a TTY
+  local cols tty=0 dash line
   cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
   [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
   [[ -t 1 ]] && tty=1
-  if locale 2>/dev/null | grep -qi 'utf-8'; then utf8=1; fi
-  if (( utf8 == 1 )); then dash='─'; else dash='-'; fi
+
+  # Default to ASCII unless explicitly opted into UTF-8
+  dash='-'
+  if [[ "${USE_UTF8_BANNER:-0}" == "1" ]]; then
+    if (( tty == 1 )) && locale 2>/dev/null | grep -qi 'utf-8'; then
+      dash='─'
+    fi
+  fi
   line="$(printf "%${cols}s" | tr ' ' "$dash")"
 
   # Optional color (respect NO_COLOR and only when on a TTY)

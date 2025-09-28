@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/bootstrap.sh
 # Version: v0.25.0
-# Script-Version : v1.10.4
+# Script-Version : v1.10.5
 # Packaged-In    : v0.25.0
 # Package-Compat : >=v0.25.0 <v0.26.0
 # Last-Reviewed  : 2025-09-27 with package v0.25.0
@@ -15,6 +15,7 @@
 #   and installs 'actualctl' into PATH by default.
 #
 # Changes since v0.23.3:
+#   - v1.10.5: preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure).
 #   - v1.10.4: prefer system VERSION manifest (/usr/share/tkl-actual-bootstrap/VERSION) over local ./VERSION for package reporting; aligns with actualctl; no behavior change when both match.
 #   - v1.10.3: bash completions installer (actualctl & bootstrap) wired into normal and --update-install paths; prints hint to reload bash-completion; no app behavior change.
 #   - v1.10.2: add --update-install flags: --with-units, --with-nginx, and --update-install-all; refresh units/nginx in update path; require domain for nginx.
@@ -73,16 +74,22 @@ SCRIPT_VERSION="$(_script_version)"
 # Banner + help
 # ───────────────────────────────────────────────────────────────────────────────
 banner() {
-  # Detect width, UTF-8 capability, and whether stdout is a TTY
-  local cols utf8=0 tty=0 dash line
+  # Detect width and whether stdout is a TTY
+  local cols tty=0 dash line
   cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
   [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
   [[ -t 1 ]] && tty=1
-  if locale 2>/dev/null | grep -qi 'utf-8'; then utf8=1; fi
-  if (( utf8 == 1 )); then dash='─'; else dash='-'; fi
+
+  # Default to ASCII unless explicitly opted into UTF-8
+  dash='-'
+  if [[ "${USE_UTF8_BANNER:-0}" == "1" ]]; then
+    if (( tty == 1 )) && locale 2>/dev/null | grep -qi 'utf-8'; then
+      dash='─'
+    fi
+  fi
   line="$(printf "%${cols}s" | tr ' ' "$dash")"
 
-  # Optional color (respect NO_COLOR and only when on a TTY)
+  # Optional color (respect NO_COLOR)
   local clr_reset="" clr_em=""
   if (( tty == 1 )) && [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
     clr_reset="$(tput sgr0 2>/dev/null || true)"
@@ -259,6 +266,20 @@ require_cmd() {
   [[ $miss -eq 0 ]] || die "Install required tools and re-run."
 }
 
+# Return 0 if the given version exists on npm; supports v-prefixed or bare versions
+npm_version_exists() {
+  local ver="${1:-}"; [[ -n "$ver" ]] || return 1
+  local npmver="${ver#v}"
+  # Query as the service user; exit code indicates existence
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$APP_USER" -- sh -lc \
+      "npm view '@actual-app/sync-server@${npmver}' version --silent >/dev/null 2>&1"
+  else
+    su -s /bin/sh - "$APP_USER" -c \
+      "npm view '@actual-app/sync-server@${npmver}' version --silent >/dev/null 2>&1"
+  fi
+}
+
 # ───────────────────────────────────────────────────────────────────────────────
 # Domain handling
 # ───────────────────────────────────────────────────────────────────────────────
@@ -342,29 +363,45 @@ ensure_dirs() {
 install_version() {
   local ver="${1:-}"
   [[ -n "$ver" ]] || die "install_version: missing version (got empty arg)"
-  local dest="${BASE_APP}/${ver}"
-  log "Preparing app dir: $dest"
-  run "mkdir -p '$dest'"
-  run "chown -R '$APP_USER:$APP_GROUP' '$dest'"
+  local npmver="${ver#v}"
+  local dest="${BASE_APP}/v${npmver}"
 
-  if [[ -f "$dest/node_modules/@actual-app/sync-server/package.json" ]]; then
-    log "Version present: $ver (skipping npm install)"
-    return
-  fi
+  # Build in a temp dir owned by the service user; only move into place on success
+  local build
+  build="$(mktemp -d -p "${BASE_APP}" ".build-v${npmver}.XXXXXX")" \
+    || die "mktemp failed under ${BASE_APP}"
+  log "Preparing temp build dir: ${build}"
+  run "chown -R '${APP_USER}:${APP_GROUP}' '${build}'"
 
-  log "Installing @actual-app/sync-server@$ver into $dest"
+  # Cleanup on function return (success or failure); harmless if moved
+  trap "rm -rf '${build}' 2>/dev/null || true" RETURN
+
+  # Do the install as the service user
   if command -v runuser >/dev/null 2>&1; then
-    run "runuser -u '$APP_USER' -- bash -lc 'cd \"$dest\" && { test -f package.json || npm init -y; } && npm config set fund false && npm config set audit false && npm install \"@actual-app/sync-server@$ver\"'"
+    run "runuser -u '${APP_USER}' -- sh -lc 'cd \"${build}\" && { test -f package.json || npm init -y >/dev/null 2>&1; } && npm config set fund false && npm config set audit false && npm install \"@actual-app/sync-server@${npmver}\"'"
   else
-    run "su -s /bin/bash - '$APP_USER' -c 'cd \"$dest\" && { test -f package.json || npm init -y; } && npm config set fund false && npm config set audit false && npm install \"@actual-app/sync-server@$ver\"'"
+    run "su -s /bin/sh - '${APP_USER}' -c 'cd \"${build}\" && { test -f package.json || npm init -y >/dev/null 2>&1; } && npm config set fund false && npm config set audit false && npm install \"@actual-app/sync-server@${npmver}\"'"
   fi
+
+  # Sanity check result
+  if [[ ! -d "${build}/node_modules/@actual-app/sync-server" ]]; then
+    die "Install failed: @actual-app/sync-server@${npmver} not found in ${build}/node_modules"
+  fi
+
+  # Move into place atomically
+  run "rm -rf '${dest}'"
+  run "mv '${build}' '${dest}'"
+  trap - RETURN
+
+  log "Installed Actual Sync Server @ ${dest}"
 }
 
 ensure_links() {
   # Point instance links (development/test/production) to the chosen version
   local ver="${1:-}"; [[ -n "$ver" ]] || die "ensure_links: missing version (got empty arg)"
+  local canon="v${ver#v}"
   for link in "${INSTANCES[@]}"; do
-    local target="${BASE_APP}/${ver}"
+    local target="${BASE_APP}/${canon}"
     local linkpath="${BASE_APP}/${link}"
     log "Linking: $linkpath -> $target"
     run "ln -sfn '$target' '$linkpath'"
@@ -749,6 +786,15 @@ main() {
 
   ensure_user
   ensure_dirs
+  # Verify the requested version exists before attempting an install
+  if (( DRY_RUN == 1 )); then
+    log "[dry-run] would verify npm version '${VERSION}' via npm view"
+  else
+    log "Validating npm version: ${VERSION}"
+    if ! npm_version_exists "${VERSION}"; then
+      die "No such npm version: @actual-app/sync-server@${VERSION}. Try 'actualctl verify ${VERSION}' or choose a valid version."
+    fi
+  fi
   install_version "$VERSION"
   ensure_links "$VERSION"
   ensure_configs

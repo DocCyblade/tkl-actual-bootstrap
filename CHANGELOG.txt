@@ -12,7 +12,9 @@ WHAT’S NEW — v0.25.0
 - Hardening & polish
   - Broad `set -u` safety: initialize locals, validate args, nounset‑safe traps; clearer errors.
   - Adaptive banners (auto width, ASCII fallback, TTY‑only bold, honors `NO_COLOR`) in both scripts.
+  - Banners now default to ASCII; opt-in UTF-8 line via USE_UTF8_BANNER=1 (still respects NO_COLOR and only applies when on a TTY).
   - `actualctl` **and** `bootstrap.sh` prefer the system manifest `/usr/share/tkl-actual-bootstrap/VERSION` over a local `./VERSION`.
+  - Installer safety: preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure).
 - Defaults
   - Default Actual Sync Server remains **v25.7.1** (examples updated accordingly).
 - Not included
@@ -74,6 +76,7 @@ WHAT’S NEW — v0.23.2
 
 2) scripts/bootstrap.sh — full history (newest → oldest)
 --------------------------------------------------------
+- v1.10.5  Preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure); banner defaults to ASCII (opt‑in UTF‑8 with USE_UTF8_BANNER=1).
 - v1.10.4  Prefer system VERSION manifest over local ./VERSION for package reporting; aligns with actualctl; no behavior change when both match.
 - v1.10.3  Bash completions installer (actualctl & bootstrap) wired into normal and `--update-install` paths; prints hint to reload bash‑completion; no app behavior change.
 - v1.10.2  Added `--with-units`, `--with-nginx`, and `--update-install-all`; update path can refresh systemd units and Nginx; requires domain for Nginx path.
@@ -116,6 +119,7 @@ WHAT’S NEW — v0.23.2
 
 3) scripts/actualctl — full history (newest → oldest)
 -----------------------------------------------------
+- v1.10.4  Banner defaults to ASCII; opt‑in UTF‑8 with USE_UTF8_BANNER=1; respects NO_COLOR/TTY; header sync.
 - v1.10.3  Verify: nounset‑safe cleanup trap; accepts versions with or without a leading `v`; prefers system VERSION manifest over local; additional `set -u` fixes; adaptive banner.
 - v1.10.2  Removed unrequested `open` subcommand; split combined `local` declarations to avoid nounset errors; adaptive banner; help trimmed to point at docs.
 - v1.10.1  Header/version sync; removed legacy `TKL_ACTUAL_*` references; `env` and unit‑render helpers hardened for nounset.
