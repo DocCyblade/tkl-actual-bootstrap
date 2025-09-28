@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
-# Version: v0.24.1
-# Script-Version : v1.8.0
-# Packaged-In    : v0.24.1
-# Package-Compat : >=v0.24.1 <v0.25.0
-# Last-Reviewed  : 2025-09-27 with package v0.24.1
+# Version: v0.25.0
+# Script-Version : v1.10.3
+# Packaged-In    : v0.25.0
+# Package-Compat : >=v0.25.0 <v0.26.0
+# Last-Reviewed  : 2025-09-27 with package v0.25.0
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Summary:
@@ -14,8 +14,10 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
-#   - Docs-only: updated banner & references to CHANGELOG.txt / README.txt
-#   - No functional changes
+#   - Dynamic versioning: --version now prints "script <Script-Version> (package <PKG_VERSION>)"
+#   - Doctor remediation: new 'doctor --fix' installs/refreshes the system VERSION manifest
+#   - Docs: updated usage/help text
+#   - v1.10.3: verify trap is nounset-safe; accepts 'v'-prefixed versions (strips 'v' for npm install).
 #
 # License: GNU GPL v3
 # Author : Ken Robinson <ken@turnkeylinux.org>
@@ -29,9 +31,10 @@ set -Eeuo pipefail
 
 # --- dynamic version helpers (do not remove) ---
 __tklab_read_version_file() {
-  local f
-  for f in "${TKL_ACTUAL_VERSION_FILE:-}" "./VERSION" \
+  local f v=""
+  for f in "${TKL_ACTUAL_VERSION_FILE:-}" \
            "/usr/share/tkl-actual-bootstrap/VERSION" \
+           "./VERSION" \
            "/etc/actual-budget/pkg.version"; do
     [[ -n "$f" && -r "$f" ]] || continue
     if grep -q '^PKG_VERSION=' "$f" 2>/dev/null; then
@@ -47,7 +50,6 @@ __tklab_read_version_file() {
 
 _pkg_version() {
   local v
-  [[ -n "$TKL_ACTUAL_PKG_VERSION" ]] && { echo "$TKL_ACTUAL_PKG_VERSION"; return; }
   v=$(__tklab_read_version_file)
   [[ -n "$v" ]] && { echo "$v"; return; }
   if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -69,16 +71,31 @@ SCRIPT_VERSION="$(_script_version)"
 # Pretty banner + basic help
 # ───────────────────────────────────────────────────────────────────────────────
 banner() {
-  cat <<BANNER
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : actualctl                    script ${SCRIPT_VERSION} │
-│ Bootstrap for running Actual Sync Server on TurnKey Linux     package ${PKG_VERSION} │
-│ License: GPL-3.0-or-later                                                     │
-│ Author: Ken Robinson <ken@turnkeylinux.org>                                   │
-│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap                    │
-│ Hint:   actualctl --help                                                      │
-└──────────────────────────────────────────────────────────────────────────────┘
-BANNER
+  # Detect width, UTF-8 capability, and whether stdout is a TTY
+  local cols utf8=0 tty=0 dash line
+  cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+  [[ -t 1 ]] && tty=1
+  if locale 2>/dev/null | grep -qi 'utf-8'; then utf8=1; fi
+  if (( utf8 == 1 )); then dash='─'; else dash='-'; fi
+  line="$(printf "%${cols}s" | tr ' ' "$dash")"
+
+  # Optional color (respect NO_COLOR and only when on a TTY)
+  local clr_reset="" clr_em=""
+  if (( tty == 1 )) && [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
+    clr_reset="$(tput sgr0 2>/dev/null || true)"
+    clr_em="$(tput bold 2>/dev/null || true)"
+  fi
+
+  printf '%s\n' "$line"
+  printf '  %stkl-actual-bootstrap%s : actualctl (%s) - package %s\n' \
+    "$clr_em" "$clr_reset" "${SCRIPT_VERSION}" "${PKG_VERSION}"
+  printf '  Ops CLI for Actual Sync Server on TurnKey Linux\n'
+  printf '  License: GPL-3.0-or-later\n'
+  printf '  Author: Ken Robinson <ken@turnkeylinux.org>\n'
+  printf '  Source: https://github.com/DocCyblade/tkl-actual-bootstrap\n'
+  printf '  Hint:   actualctl --help\n'
+  printf '%s\n' "$line"
 }
 
 usage_quick() {
@@ -94,7 +111,7 @@ Usage: actualctl <command> [args]
 
 Commands (high level):
   help | --help | -h          Show full help and exit
-  version | --version         Show script version
+  version | --version         Show script/package version
   list                        Show instances, symlink targets, and service status
   check                       Run basic health checks (tools present, dirs exist)
   env [INSTANCE]              Show environment & paths (all or one)
@@ -125,18 +142,8 @@ Service wrappers:
   service <INSTANCE> start|stop|restart|status
   logs    <INSTANCE> [lines]  Tail journal for the instance unit
 
-Examples:
-  actualctl list
-  actualctl fetch v25.7.1
-  actualctl switch production v25.7.1
-  actualctl backup production "pre-upgrade"
-  actualctl restore production /srv/backups/prod-20250101-120000-pre-upgrade.tgz
-  actualctl instance add staging v25.7.1 --from production --port 5002
-  actualctl instance set-port staging 5003
-  actualctl health production
-  actualctl doctor
-  actualctl doctor --fix
-  actualctl prune-backups --keep 10
+Full Examples see docs/README.actualctl.txt
+
 HELP
 }
 
@@ -332,7 +339,10 @@ cmd_env() {
     return 0
   fi
 
-  local dat="/srv/${inst}/data" cfg="${dat}/config.json" link="${BASE_APP}/${inst}" ver="(none)"
+  local dat="/srv/${inst}/data"
+  local cfg="${dat}/config.json"
+  local link="${BASE_APP}/${inst}"
+  local ver="(none)"
   [[ -L "$link" ]] && ver="$(basename "$(readlink -f "$link")")"
   local port host; port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"
 
@@ -382,21 +392,21 @@ cmd_verify() {
   # Dry-run install to temp dir (does not affect running instances)
   require_root
   local ver="${1:-}"; [[ -n "$ver" ]] || die "Usage: actualctl verify <vX.Y.Z>"
+  local npmver="${ver#v}"
 
   local tmp="${BASE_APP}/.verify-${ver}.$(date +%s)"
   mkdir -p "$tmp"
   chown -R "$APP_USER:$APP_GROUP" "$tmp"
 
-  # Always clean up temp on exit/failure
-  _verify_cleanup() { rm -rf "$tmp" 2>/dev/null || true; }
-  trap _verify_cleanup EXIT
+  # Always clean up temp on exit/failure (nicer for nounset)
+  trap "rm -rf '$tmp' 2>/dev/null || true" EXIT
 
   log "verify: installing to temp $tmp"
   as_user "cd \"$tmp\" \
     && npm init -y >/dev/null 2>&1 \
     && npm config set fund false \
     && npm config set audit false \
-    && npm install \"@actual-app/sync-server@${ver}\""
+    && npm install \"@actual-app/sync-server@${npmver}\""
 
   [[ -d "$tmp/node_modules/@actual-app/sync-server" ]] \
     && log "verify: OK (module present)" \
@@ -463,7 +473,9 @@ cmd_prune_backups() {
 
 # Render a systemd unit for a given instance (used by instance add)
 _unit_text() {
-  local inst="$1" linkdir="${BASE_APP}/${inst}" datadir="/srv/${inst}/data"
+  local inst="$1"
+  local linkdir="${BASE_APP}/${inst}"
+  local datadir="/srv/${inst}/data"
   cat <<UNIT
 [Unit]
 Description=Actual Sync Server (${inst})
@@ -509,7 +521,12 @@ cmd_instance_add() {
   if [[ -n "$fromInst" ]]; then
     local src="/srv/${fromInst}/data"
     [[ -d "$src" ]] || die "Source data missing: $src"
-    rsync -a --delete "$src/." "$dat/"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --delete "$src/." "$dat/"
+    else
+      warn "rsync not found; falling back to cp -a (no deletion of extraneous files)"
+      cp -a "$src/." "$dat/"
+    fi
   fi
   chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
 
@@ -632,7 +649,9 @@ cmd_health() {
   [[ -n "$port" ]] || { err "health: no port in $cfg"; return 1; }
 
   if [[ -n "$domain" ]]; then
-    local host="${inst}-budgetapp.${domain}" up="https://${host}/health/upstream" code
+    local host up code
+    host="${inst}-budgetapp.${domain}"
+    up="https://${host}/health/upstream"
     code="$(_curl_code "$up")"
     if [[ "$code" == "200" ]]; then
       log "health: upstream OK (${inst}) 200 ${up}"

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # tkl-actual-bootstrap : systemd/budgetapp.service.tpl
-# Version: v0.23.2
+# File-Version: 1.0
 #
 # Instance unit for Actual Sync Server.
 # Rendered as: /etc/systemd/system/{{INSTANCE}}-budgetapp.service

@@ -1,4 +1,4 @@
-scripts/actualctl — README  (v0.24.1)
+scripts/actualctl — README  (v0.25.0)
 =====================================
 
 Purpose
@@ -8,6 +8,7 @@ Ops CLI for managing Actual multi-instance installs on TurnKey Linux.
 Quick usage
 -----------
 actualctl --help
+actualctl help
 actualctl --version
 
 Core commands
@@ -22,7 +23,7 @@ Version / app mgmt
 ------------------
 fetch <vX.Y.Z>       Install @actual-app/sync-server@<ver> into /srv/app/<ver>
 switch <INST> <VER>  /srv/app/<INST> -> /srv/app/<VER>, then restart service
-verify <vX.Y.Z>      Install to temp, smoke-check presence, cleanup
+verify <vX.Y.Z>      Install to a temp dir, smoke-check presence, cleanup (no changes to live instances)
 
 Backups
 -------
@@ -59,10 +60,17 @@ actualctl instance set-port staging 5003
 actualctl health production
 actualctl doctor
 actualctl doctor --fix
+actualctl env
+actualctl env production
+actualctl verify v25.7.1
+actualctl service production restart
+actualctl logs production 200
+actualctl prune-backups --keep 10
 
 Notes
 -----
-- "actualctl --version" prints script/package version.
+- "actualctl --version" prints: actualctl <Script-Version> (package <PKG_VERSION>).
 - "doctor --fix" installs/refreshes /usr/share/tkl-actual-bootstrap/VERSION.
 - JSON parsing prefers jq when available; awk-based fallback is used otherwise.
 - If rsync is not installed, instance data copy falls back to "cp -a" (no deletion of extraneous files).
+- This file is installed to /usr/share/tkl-actual-bootstrap/docs/README.actualctl.txt by "bootstrap.sh --update-install".

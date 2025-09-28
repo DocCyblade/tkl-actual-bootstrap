@@ -1,4 +1,4 @@
-scripts/bootstrap.sh — README  (v0.24.1)
+scripts/bootstrap.sh — README  (v0.25.0)
 ========================================
 
 Purpose

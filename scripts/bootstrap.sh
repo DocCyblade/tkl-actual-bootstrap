@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/bootstrap.sh
-# Version: v0.24.1
-# Script-Version : v1.8.0
-# Packaged-In    : v0.24.1
-# Package-Compat : >=v0.24.1 <v0.25.0
-# Last-Reviewed  : 2025-09-27 with package v0.24.1
+# Version: v0.25.0
+# Script-Version : v1.10.4
+# Packaged-In    : v0.25.0
+# Package-Compat : >=v0.25.0 <v0.26.0
+# Last-Reviewed  : 2025-09-27 with package v0.25.0
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Summary:
@@ -15,8 +15,11 @@
 #   and installs 'actualctl' into PATH by default.
 #
 # Changes since v0.23.3:
-#   - Docs-only: updated banner & references to CHANGELOG.txt / README.txt
-#   - No functional changes
+#   - v1.10.4: prefer system VERSION manifest (/usr/share/tkl-actual-bootstrap/VERSION) over local ./VERSION for package reporting; aligns with actualctl; no behavior change when both match.
+#   - v1.10.3: bash completions installer (actualctl & bootstrap) wired into normal and --update-install paths; prints hint to reload bash-completion; no app behavior change.
+#   - v1.10.2: add --update-install flags: --with-units, --with-nginx, and --update-install-all; refresh units/nginx in update path; require domain for nginx.
+#   - v1.10.1: set -u hardening (version helpers, install_version/ensure_links), adaptive banner, stronger ensure_user (group creation), require_cmd adds groupadd/getent/mktemp, help/defaults synced.
+#   - v1.10.0: prep for v0.25.0 packaging and docs refresh.
 #
 # License: GNU GPL v3
 # Author : Ken Robinson <ken@turnkeylinux.org>
@@ -30,9 +33,10 @@ set -Eeuo pipefail
 
 # --- dynamic version helpers (do not remove) ---
 __tklab_read_version_file() {
-  local f
-  for f in "${TKL_ACTUAL_VERSION_FILE:-}" "./VERSION" \
+  local f v=""
+  for f in "${TKL_ACTUAL_VERSION_FILE:-}" \
            "/usr/share/tkl-actual-bootstrap/VERSION" \
+           "./VERSION" \
            "/etc/actual-budget/pkg.version"; do
     [[ -n "$f" && -r "$f" ]] || continue
     if grep -q '^PKG_VERSION=' "$f" 2>/dev/null; then
@@ -48,7 +52,6 @@ __tklab_read_version_file() {
 
 _pkg_version() {
   local v
-  [[ -n "$TKL_ACTUAL_PKG_VERSION" ]] && { echo "$TKL_ACTUAL_PKG_VERSION"; return; }
   v=$(__tklab_read_version_file)
   [[ -n "$v" ]] && { echo "$v"; return; }
   if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -70,22 +73,37 @@ SCRIPT_VERSION="$(_script_version)"
 # Banner + help
 # ───────────────────────────────────────────────────────────────────────────────
 banner() {
-  cat <<BANNER
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ tkl-actual-bootstrap : bootstrap.sh               script \${SCRIPT_VERSION} │
-│ Bootstrap for running Actual Sync Server on TurnKey Linux     package \${PKG_VERSION} │
-│ License: GPL-3.0-or-later                                                     │
-│ Author: Ken Robinson <ken@turnkeylinux.org>                                   │
-│ Source: https://github.com/DocCyblade/tkl-actual-bootstrap                    │
-│ Hint:   ./scripts/bootstrap.sh --help                                         │
-└──────────────────────────────────────────────────────────────────────────────┘
-BANNER
+  # Detect width, UTF-8 capability, and whether stdout is a TTY
+  local cols utf8=0 tty=0 dash line
+  cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+  [[ -t 1 ]] && tty=1
+  if locale 2>/dev/null | grep -qi 'utf-8'; then utf8=1; fi
+  if (( utf8 == 1 )); then dash='─'; else dash='-'; fi
+  line="$(printf "%${cols}s" | tr ' ' "$dash")"
+
+  # Optional color (respect NO_COLOR and only when on a TTY)
+  local clr_reset="" clr_em=""
+  if (( tty == 1 )) && [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
+    clr_reset="$(tput sgr0 2>/dev/null || true)"
+    clr_em="$(tput bold 2>/dev/null || true)"
+  fi
+
+  printf '%s\n' "$line"
+  printf '  %stkl-actual-bootstrap%s : bootstrap.sh (%s) - package %s\n' \
+    "$clr_em" "$clr_reset" "${SCRIPT_VERSION}" "${PKG_VERSION}"
+  printf '  Bootstrap for running Actual Sync Server on TurnKey Linux\n'
+  printf '  License: GPL-3.0-or-later\n'
+  printf '  Author: Ken Robinson <ken@turnkeylinux.org>\n'
+  printf '  Source: https://github.com/DocCyblade/tkl-actual-bootstrap\n'
+  printf '  Hint:   ./scripts/bootstrap.sh --help\n'
+  printf '%s\n' "$line"
 }
 
 usage_quick() {
   cat <<'HELP'
-Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--version vX.Y.Z] [--ctl-path /path/actualctl] [--about]
-Hint : ./scripts/bootstrap.sh --help   # full documentation & examples
+Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--install-version vX.Y.Z] [--ctl-path /path/actualctl] [--version]
+Hint : ./scripts/bootstrap.sh --help   # full docs | Use --update-install to refresh CLI/docs
 HELP
 }
 
@@ -96,10 +114,14 @@ Usage:
     [--yes|-y]
     [--dry-run]
     [--domain <name>]
-    [--version vX.Y.Z]
+    [--install-version vX.Y.Z]
     [--ctl-path /usr/local/sbin/actualctl]
     [--help]
-    [--about]
+    [--version]
+    --update-install
+    [--with-units]
+    [--with-nginx]
+    [--update-install-all]
 
 Options:
   --yes, -y            Non-interactive mode (assume “Yes” to prompts) for LIVE runs
@@ -107,10 +129,15 @@ Options:
   --domain NAME        Your base domain (e.g., example.com)
                        NOTE: If you pass --domain, you must also pass --yes (live) or --dry-run (preview).
                        If omitted, you'll be prompted (interactive mode).
-  --version VER        Actual sync-server npm version (default: v25.7.1)
+  --install-version VER  Actual sync-server npm version to install (default: v25.7.1)
   --ctl-path PATH      Destination for installing actualctl (default: /usr/local/sbin/actualctl)
   --help               Show this help and exit
-  --about             Show script/package versions and exit
+  --version            Show script/package versions and exit
+  --update-install     Refresh installed assets (actualctl, docs, VERSION) only; no app install/links
+  --with-units         With --update-install, also reinstall systemd units (daemon-reload, enable/start)
+  --with-nginx         With --update-install, also re-render Nginx vhosts and reload Nginx
+                       (requires domain in /etc/actual-budget/env or pass --domain NAME with -y/--dry-run)
+  --update-install-all Equivalent to --update-install --with-units --with-nginx
 
 Default ports:
   development: 5006
@@ -156,6 +183,9 @@ DRY_RUN=0
 ASSUME_YES=0
 BUDGET_DOMAIN=""
 DOMAIN_FLAG_SET=0
+DO_UPDATE_INSTALL=0
+DO_WITH_UNITS=0
+DO_WITH_NGINX=0
 
 # actualctl install destination (always install by default)
 CTL_DST="/usr/local/sbin/actualctl"
@@ -195,9 +225,13 @@ while [[ $# -gt 0 ]]; do
     --dry-run)    DRY_RUN=1; shift ;;
     -y|--yes)     ASSUME_YES=1; shift ;;
     --domain)     BUDGET_DOMAIN="${2:-}"; DOMAIN_FLAG_SET=1; shift 2 ;;
-    --version)    VERSION="${2:-}"; shift 2 ;;
+    --install-version) VERSION="${2:-}"; shift 2 ;;
     --ctl-path)   CTL_DST="${2:-/usr/local/sbin/actualctl}"; shift 2 ;;
-    --about)      echo "bootstrap.sh ${SCRIPT_VERSION} (package ${PKG_VERSION})"; exit 0 ;;
+    --version)     echo "bootstrap.sh ${SCRIPT_VERSION} (package ${PKG_VERSION})"; exit 0 ;;
+    --update-install) DO_UPDATE_INSTALL=1; shift ;;
+    --with-units) DO_WITH_UNITS=1; shift ;;
+    --with-nginx) DO_WITH_NGINX=1; shift ;;
+    --update-install-all) DO_UPDATE_INSTALL=1; DO_WITH_UNITS=1; DO_WITH_NGINX=1; shift ;;
     *)            err "Unknown arg: $1"; usage_quick; exit 2 ;;
   esac
 done
@@ -217,7 +251,7 @@ require_root() { [[ $(id -u) -eq 0 ]] || die "Run as root (no sudo)."; }
 require_cmd() {
   # Only require tools we actually use here (actualctl has its own checks)
   local miss=0
-  for c in node npm systemctl nginx sed install ln mkdir chown cmp useradd; do
+  for c in node npm systemctl nginx sed install ln mkdir chown cmp useradd groupadd getent mktemp; do
     command -v "$c" >/dev/null 2>&1 || { err "Missing command: $c"; miss=1; }
   done
   # We try runuser for nicer env; fallback to su in code paths that need it.
@@ -276,11 +310,17 @@ prompt_domain_if_needed() {
 # System user / dirs
 # ───────────────────────────────────────────────────────────────────────────────
 ensure_user() {
+  if getent group "$APP_GROUP" >/dev/null 2>&1; then
+    log "Group exists: $APP_GROUP"
+  else
+    log "Creating system group '$APP_GROUP'"
+    run "groupadd --system '$APP_GROUP'"
+  fi
   if id "$APP_USER" >/dev/null 2>&1; then
     log "User exists: $APP_USER"
   else
     log "Creating user '$APP_USER' with home $APP_HOME"
-    run "useradd --system --create-home --home-dir '$APP_HOME' --shell '$APP_SHELL' '$APP_USER'"
+    run "useradd --system --gid '$APP_GROUP' --create-home --home-dir '$APP_HOME' --shell '$APP_SHELL' '$APP_USER'"
   fi
   run "mkdir -p '$APP_HOME/.npm'"
   run "chown -R '$APP_USER:$APP_GROUP' '$APP_HOME'"
@@ -300,7 +340,9 @@ ensure_dirs() {
 # App install + linking
 # ───────────────────────────────────────────────────────────────────────────────
 install_version() {
-  local ver="$1" dest="${BASE_APP}/${ver}"
+  local ver="${1:-}"
+  [[ -n "$ver" ]] || die "install_version: missing version (got empty arg)"
+  local dest="${BASE_APP}/${ver}"
   log "Preparing app dir: $dest"
   run "mkdir -p '$dest'"
   run "chown -R '$APP_USER:$APP_GROUP' '$dest'"
@@ -320,7 +362,7 @@ install_version() {
 
 ensure_links() {
   # Point instance links (development/test/production) to the chosen version
-  local ver="$1"
+  local ver="${1:-}"; [[ -n "$ver" ]] || die "ensure_links: missing version (got empty arg)"
   for link in "${INSTANCES[@]}"; do
     local target="${BASE_APP}/${ver}"
     local linkpath="${BASE_APP}/${link}"
@@ -568,6 +610,71 @@ install_nginx() {
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
+# Package version manifest (install VERSION file to system path)
+# ───────────────────────────────────────────────────────────────────────────────
+install_version_manifest() {
+  local bundle_dir src dest_dir dst
+  bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  src="${bundle_dir}/VERSION"
+  dest_dir="/usr/share/tkl-actual-bootstrap"
+  dst="${dest_dir}/VERSION"
+
+  if [[ -f "$src" ]]; then
+    log "Installing package VERSION manifest to $dst"
+    run "install -d -m 0755 \"$dest_dir\""
+    copy_if_changed "$src" "$dst"
+  else
+    warn "VERSION file not found at $src; skipping package manifest install"
+  fi
+}
+
+install_docs() {
+  local bundle_dir src_dir dest_dir
+  bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  src_dir="${bundle_dir}/docs"
+  dest_dir="/usr/share/tkl-actual-bootstrap/docs"
+
+  if [[ ! -d "$src_dir" ]]; then
+    warn "Docs dir not found at $src_dir; skipping docs install"
+    return 0
+  fi
+  run "install -d -m 0755 \"$dest_dir\""
+  # Copy all files (preserve subdirs)
+  local f rel dst
+  while IFS= read -r -d '' f; do
+    rel="${f#"$src_dir"/}"
+    dst="$dest_dir/$rel"
+    run "install -d -m 0755 \"$(dirname "$dst")\""
+    copy_if_changed "$f" "$dst"
+  done < <(find "$src_dir" -type f -print0)
+}
+
+# Install bash completion files for actualctl and bootstrap
+install_completions() {
+  local bundle_dir src_dir dest_dir
+  bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  src_dir="${bundle_dir}/completions"
+  dest_dir="/etc/bash_completion.d"
+  if [[ ! -d "$src_dir" ]]; then
+    warn "Completions dir not found at $src_dir; skipping bash completion install"
+    return 0
+  fi
+  run "install -d -m 0755 \"$dest_dir\""
+  # actualctl completion
+  if [[ -f "${src_dir}/actualctl.bash" ]]; then
+    copy_if_changed "${src_dir}/actualctl.bash" "${dest_dir}/actualctl"
+  else
+    warn "Missing ${src_dir}/actualctl.bash"
+  fi
+  # bootstrap completion (installed as 'tkl-actual-bootstrap' and bound also to ./scripts/bootstrap.sh)
+  if [[ -f "${src_dir}/bootstrap.bash" ]]; then
+    copy_if_changed "${src_dir}/bootstrap.bash" "${dest_dir}/tkl-actual-bootstrap"
+  else
+    warn "Missing ${src_dir}/bootstrap.bash"
+  fi
+}
+
+# ───────────────────────────────────────────────────────────────────────────────
 # actualctl installation (ALWAYS install; --ctl-path to override)
 # ───────────────────────────────────────────────────────────────────────────────
 install_ctl() {
@@ -601,6 +708,33 @@ main() {
   banner
   require_root
   require_cmd
+  if (( DO_UPDATE_INSTALL == 1 )); then
+    log "Refreshing installed assets (VERSION/docs/CLI)"
+    install_version_manifest
+    install_docs
+    install_ctl
+    install_completions
+    if (( DO_WITH_UNITS == 1 )); then
+      log "Refreshing systemd units"
+      ensure_user
+      ensure_dirs
+      install_units
+    fi
+    if (( DO_WITH_NGINX == 1 )); then
+      # Ensure we have a domain (from env or arg); do not prompt here
+      if [[ -z "$BUDGET_DOMAIN" ]]; then
+        if ! read_env_domain; then
+          die "--with-nginx requires a domain (set via previous run or pass --domain NAME with -y/--dry-run)."
+        fi
+      fi
+      log "Refreshing Nginx vhosts for domain: $BUDGET_DOMAIN"
+      install_nginx
+    fi
+    log "Bash completion installed to /etc/bash_completion.d (reload your shell or source /etc/bash_completion)"
+    log "Update-install complete."
+    return 0
+  fi
+
   prompt_domain_if_needed
 
   log "Parameters"
@@ -618,9 +752,11 @@ main() {
   install_version "$VERSION"
   ensure_links "$VERSION"
   ensure_configs
+  install_version_manifest
   install_units
   install_nginx
   install_ctl
+  install_completions
 
   log "Complete."
   log "Visit:"

@@ -1,11 +1,22 @@
-CHANGELOG (cumulative)
-======================
-
-
-Project: tkl-actual-bootstrap
-License: GNU GPL v3
-Author : Ken Robinson <ken@turnkeylinux.org>
-Source : https://github.com/DocCyblade/tkl-actual-bootstrap
+WHAT’S NEW — v0.25.0
+-----------------------
+- Update/refresh workflow
+  - New `--update-install` to refresh the installed assets (**VERSION**, **docs**, **actualctl**) without touching the app version/links.
+  - Optional `--with-units`, `--with-nginx`, and convenience `--update-install-all` to also reinstall systemd units and re-render Nginx vhosts.
+- Bash completions
+  - New `completions/actualctl.bash` and `completions/bootstrap.bash`.
+  - Installer copies them to `/etc/bash_completion.d/` (prints a hint to reload bash-completion).
+- Docs
+  - README now includes **Installation (fresh TurnKey Linux NodeJS)** and **Updating installed files (CLI/DOCS/UNITS/NGINX)**.
+  - Plain‑text docs under `docs/` are installed to `/usr/share/tkl-actual-bootstrap/docs/`; `actualctl --help` points to `README.actualctl.txt`.
+- Hardening & polish
+  - Broad `set -u` safety: initialize locals, validate args, nounset‑safe traps; clearer errors.
+  - Adaptive banners (auto width, ASCII fallback, TTY‑only bold, honors `NO_COLOR`) in both scripts.
+  - `actualctl` **and** `bootstrap.sh` prefer the system manifest `/usr/share/tkl-actual-bootstrap/VERSION` over a local `./VERSION`.
+- Defaults
+  - Default Actual Sync Server remains **v25.7.1** (examples updated accordingly).
+- Not included
+  - No `open` subcommand in this release.
 
 WHAT’S NEW — v0.24.1
 -----------------------
@@ -63,6 +74,11 @@ WHAT’S NEW — v0.23.2
 
 2) scripts/bootstrap.sh — full history (newest → oldest)
 --------------------------------------------------------
+- v1.10.4  Prefer system VERSION manifest over local ./VERSION for package reporting; aligns with actualctl; no behavior change when both match.
+- v1.10.3  Bash completions installer (actualctl & bootstrap) wired into normal and `--update-install` paths; prints hint to reload bash‑completion; no app behavior change.
+- v1.10.2  Added `--with-units`, `--with-nginx`, and `--update-install-all`; update path can refresh systemd units and Nginx; requires domain for Nginx path.
+- v1.10.1  `set -u` hardening (version helpers, install_version/ensure_links); adaptive banner; stronger ensure_user (create group); require_cmd adds groupadd/getent/mktemp; help/defaults synced.
+- v1.10.0  Finalized CLI split: `--install-version` for installer arg; `--version` (no args) prints script/package; reads/writes manifest at `/usr/share/tkl-actual-bootstrap/VERSION`; docs refresh.
 - v0.24.1  Flags: `--install-version` replaces `--version <ver>`; dynamic version helpers and banner; installs VERSION manifest to /usr/share/tkl-actual-bootstrap/VERSION; usage/help updated.
 - v0.23.3  Docs-only: headers synced to v0.23.3; references to CHANGELOG.txt/README.txt; no behavior change.
 - v0.23.2  Default-install actualctl; domain flag guard; hardened systemd units; health endpoints; CI/package tidy; plain-text docs.
@@ -100,6 +116,10 @@ WHAT’S NEW — v0.23.2
 
 3) scripts/actualctl — full history (newest → oldest)
 -----------------------------------------------------
+- v1.10.3  Verify: nounset‑safe cleanup trap; accepts versions with or without a leading `v`; prefers system VERSION manifest over local; additional `set -u` fixes; adaptive banner.
+- v1.10.2  Removed unrequested `open` subcommand; split combined `local` declarations to avoid nounset errors; adaptive banner; help trimmed to point at docs.
+- v1.10.1  Header/version sync; removed legacy `TKL_ACTUAL_*` references; `env` and unit‑render helpers hardened for nounset.
+- v1.10.0  Prep for v0.25.0 docs alignment; minor usage text polish.
 - v0.24.1  Dynamic `--version` output (script/package); new `doctor --fix` to install/refresh VERSION manifest; banner/help updates; `instance add --from` now falls back to `cp -a` if `rsync` is missing.
 - v0.23.3  Docs-only: headers synced to v0.23.3; references to CHANGELOG.txt/README.txt; no behavior change.
 - v0.23.2  list shows only /srv/app/v* dirs; hides symlinks and npm files; banners & quick-usage harmonized; help synced with docs.

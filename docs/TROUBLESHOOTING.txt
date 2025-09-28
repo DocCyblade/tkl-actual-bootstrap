@@ -1,11 +1,19 @@
-Troubleshooting  (v0.23.2)
+Troubleshooting
 ==========================
+
+Quick checks
+------------
+- ./scripts/bootstrap.sh --version   (prints script/package versions)
+- actualctl --version                (prints script/package versions)
+- actualctl doctor                   (services, ports, nginx -t, upstream)
+- actualctl doctor --fix             (also installs/refreshes package VERSION manifest)
 
 502 Bad Gateway
 ---------------
 - actualctl health <instance>
-- journalctl -u <instance>-budgetapp -n 200
-- nginx -t
+- systemctl status <instance>-budgetapp
+- journalctl -u <instance>-budgetapp -n 200 -f
+- nginx -t && systemctl reload nginx
 - Check that /srv/<instance>/data/config.json port matches Nginx upstream
 - Ensure systemd service is running
 
@@ -25,3 +33,11 @@ Port conflicts
 --------------
 - actualctl instance set-port <instance> <new-port>
 - nginx -t && systemctl reload nginx
+- actualctl health <instance>
+
+Version manifest
+----------------
+- If versions show "unknown" or mismatch across scripts:
+  cat /usr/share/tkl-actual-bootstrap/VERSION
+  sudo actualctl doctor --fix
+  ./scripts/bootstrap.sh --version && actualctl --version

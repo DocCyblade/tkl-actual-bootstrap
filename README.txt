@@ -1,4 +1,4 @@
-tkl-actual-bootstrap  v0.24.1
+tkl-actual-bootstrap  v0.25.0
 Bootstrap for running Actual Sync Server on TurnKey Linux (NodeJS appliance v18)
 
 License: GNU GPLv3
@@ -9,7 +9,7 @@ Source : https://github.com/DocCyblade/tkl-actual-bootstrap
 QUICK START
 -----------
 1) Make scripts executable:
-   chmod +x scripts/*.sh
+   chmod +x scripts/*.sh scripts/actualctl
 
 2) Preview changes (dry run):
    ./scripts/bootstrap.sh --dry-run --domain example.com
@@ -20,9 +20,9 @@ QUICK START
 Notes:
 - If you pass --domain, you must also pass --yes (live) or --dry-run (preview).
 - If --domain is omitted, bootstrap will prompt (or default to example.com in -y mode).
-- By default, bootstrap installs @actual-app/sync-server v25.7.1 and installs the
+- By default, bootstrap installs the version pinned in scripts/bootstrap.sh and installs the
   "actualctl" CLI into /usr/local/sbin/actualctl (override with --ctl-path).
-- To install a specific version, add --install-version vX.Y.Z
+- To install a specific Actual Sync Server version, add --install-version vX.Y.Z (example: --install-version v25.7.1)
 
 
 PREREQUISITES
@@ -32,6 +32,66 @@ PREREQUISITES
 - TLS certificates on TurnKey:
   /etc/ssl/private/cert.pem
   /etc/ssl/private/cert.key
+
+INSTALLATION (FRESH TURNKEY LINUX NODEJS)
+-----------------------------------------
+Option A — Clone the repo
+  sudo su -
+  apt-get update && apt-get install -y git curl unzip
+  cd /opt
+  git clone https://github.com/DocCyblade/tkl-actual-bootstrap.git
+  cd tkl-actual-bootstrap
+  # (Optional) pin to a release tag when available
+  # git checkout v0.25.0
+
+  # Install a specific Actual Sync Server version (example)
+  ./scripts/bootstrap.sh --install-version v25.7.1
+
+Option B — Download a release archive
+  sudo su -
+  apt-get update && apt-get install -y curl unzip
+  cd /opt
+  # Replace VERSION with the release you want (e.g., v0.25.0)
+  curl -L -o tkl-actual-bootstrap.zip \
+    "https://github.com/DocCyblade/tkl-actual-bootstrap/archive/refs/tags/VERSION.zip"
+  unzip tkl-actual-bootstrap.zip
+  cd tkl-actual-bootstrap-*/
+
+  # Install a specific Actual Sync Server version (example)
+  ./scripts/bootstrap.sh --install-version v25.7.1
+
+Post-install checks
+  # Show versions (script + package)
+  ./scripts/bootstrap.sh --version
+  actualctl --version
+  actualctl --help    # Full examples: /usr/share/tkl-actual-bootstrap/docs/README.actualctl.txt
+
+  # Instance and service status
+  actualctl status
+
+  # Health endpoints (replace <instance>, <domain>, <port>)
+  # Via reverse proxy:
+  #   https://<instance>-budgetapp.<domain>/healthz
+  #   https://<instance>-budgetapp.<domain>/health/upstream
+  # Direct to backend:
+  #   curl -fsS http://127.0.0.1:<port>/health || true
+
+
+UPDATING INSTALLED FILES (CLI/DOCS/UNITS/NGINX)
+-----------------------------------------------
+Refresh the installed CLI, docs, and related assets without changing the app version:
+
+  # Minimal refresh (VERSION, docs, actualctl)
+  ./scripts/bootstrap.sh --update-install
+
+  # Also reinstall systemd units (daemon-reload, enable/start)
+  ./scripts/bootstrap.sh --update-install --with-units
+
+  # Also re-render Nginx vhosts and reload (requires domain configured or pass one)
+  ./scripts/bootstrap.sh --update-install --with-nginx -y --domain example.com
+
+  # Everything above at once
+  ./scripts/bootstrap.sh --update-install-all
 
 
 INSTALLATION LAYOUT
@@ -135,13 +195,14 @@ MIGRATION FROM PRE–v0.20
 - See docs/MIGRATION.txt for step-by-step restore and validation
 
 
-NOTES FOR v0.24.1
+NOTES FOR v0.25.0
 -----------------
-- CLI: `bootstrap.sh` now uses `--install-version` to select the Actual app version; `--version` (no arg) prints script/package versions.
+- CLI: removed the deprecated installer alias `--version <ver>`; use `--install-version <ver>`. `--version` (no args) prints script/package versions.
+- Docs: README now includes "Installation (fresh TurnKey Linux NodeJS)" with clone and release-archive paths plus post-install checks.
 - Dynamic versioning in both scripts; banners and `--version` outputs show `script <Script-Version> (package <PKG_VERSION>)`.
 - `actualctl doctor --fix` installs/refreshes the system VERSION manifest.
-- New `VERSION` manifest is installed to `/usr/share/tkl-actual-bootstrap/VERSION` by bootstrap.
-- Synchronized headers and plain-text docs; see CHANGELOG.txt for details.
+- The VERSION manifest is installed to `/usr/share/tkl-actual-bootstrap/VERSION`.
+- Synchronized headers and plain‑text docs; see CHANGELOG.txt for full details.
 
 
 LICENSE

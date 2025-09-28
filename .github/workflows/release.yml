@@ -68,7 +68,7 @@ jobs:
             Automated release for ${{ github.ref_name }}.
 
             See the project CHANGELOG for details:
-            https://github.com/DocCyblade/tkl-actual-bootstrap/blob/${{ github.ref_name }}/CHANGELOG.md
+            https://github.com/DocCyblade/tkl-actual-bootstrap/blob/${{ github.ref_name }}/CHANGELOG.txt
           files: |
             dist/tkl-actual-bootstrap-${{ github.ref_name }}.zip
             dist/MANIFEST.txt
