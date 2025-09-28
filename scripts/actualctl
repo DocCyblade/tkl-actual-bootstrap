@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.10.7
+# Script-Version : v1.10.9
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,8 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.10.9: instance add gains --no-start and --force; validates --port (numeric) and checks for in-use ports (can override with --force).
+#   - v1.10.8: list-versions marks already installed releases (bold when TTY; otherwise '** ' prefix) and appends [installed].
 #   - v1.10.7: add --check-for-updates (stable only) to compare latest npm version vs locally installed; suggests verify/fetch.
 #   - v1.10.6: add list-versions (list npm versions; default last 10 stable); flags: --limit N, --pre, --json.
 #   - v1.10.5: add prune-versions to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS.
@@ -143,10 +145,12 @@ Backups:
   prune-backups [--keep N]    Keep N most-recent per instance (default: 7)
 
 Instances:
-  instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT]
+  instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT] [--no-start] [--force]
                               Create /srv/<NAME>/data (optionally copy from SRC),
                               create unit, link /srv/app/<NAME> -> target, start.
                               If --port omitted, picks next free port automatically.
+                              --no-start: create unit but do not enable/start it
+                              --force:    overwrite non-empty target when using --from; ignore port-in-use check
   instance rm  <NAME> [--purge]
                               Stop/disable unit, remove unit, (optional) delete /srv/<NAME>
   instance set-port <NAME> <PORT>
@@ -518,8 +522,37 @@ cmd_list_versions() {
     done
     printf ']\\n'
   else
-    # Human list with leading 'v'
-    printf 'v%s\n' "${versions[@]}"
+    # Human list with markers for installed versions
+    # Discover installed versions under /srv/app (strip leading 'v')
+    local installed=() d base
+    shopt -s nullglob
+    for d in "${BASE_APP}"/v*; do
+      [[ -d "$d" ]] || continue
+      base="$(basename "$d")"
+      [[ "$base" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+      installed+=("${base#v}")
+    done
+    shopt -u nullglob
+    local iset=" ${installed[*]} "
+    # Optional bold (TTY + no NO_COLOR)
+    local tty=0 b="" r=""
+    [[ -t 1 ]] && tty=1
+    if (( tty == 1 )) && [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
+      b="$(tput bold 2>/dev/null || true)"
+      r="$(tput sgr0 2>/dev/null || true)"
+    fi
+    local v
+    for v in "${versions[@]}"; do
+      if [[ " $iset " == *" $v "* ]]; then
+        if [[ -n "$b" ]]; then
+          printf '%sv%s%s  [installed]\n' "$b" "$v" "$r"
+        else
+          printf '** v%s  [installed]\n' "$v"
+        fi
+      else
+        printf 'v%s\n' "$v"
+      fi
+    done
   fi
 }
 
@@ -710,19 +743,35 @@ cmd_instance_add() {
   # Create a new instance, optionally copying data and/or choosing a port
   require_root
 
-  local name="${1:-}" target="${2:-}" fromInst="" want_port=""
+  local name="${1:-}" target="${2:-}" fromInst="" want_port="" no_start=0 force=0
   [[ -n "$name" && -n "$target" ]] \
-    || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC] [--port PORT]"
+    || die "Usage: actualctl instance add <NAME> <vX.Y.Z|development|test|production> [--from SRC] [--port PORT] [--no-start] [--force]"
   shift 2
 
   # Parse optional flags
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --from) fromInst="${2:-}"; shift 2;;
-      --port) want_port="${2:-}"; shift 2;;
+      --from)     fromInst="${2:-}"; shift 2;;
+      --port)     want_port="${2:-}"; shift 2;;
+      --no-start) no_start=1; shift;;
+      --force)    force=1; shift;;
       *) err "Unknown option: $1"; return 2;;
     esac
   done
+
+  # Validate requested port if provided
+  if [[ -n "$want_port" ]]; then
+    [[ "$want_port" =~ ^[0-9]+$ ]] || die "PORT must be numeric"
+    if command -v ss >/dev/null 2>&1; then
+      if ss -ltn | awk '{print $4}' | grep -q ":${want_port}$"; then
+        if (( force == 1 )); then
+          warn "Port ${want_port} appears to be in use; proceeding due to --force"
+        else
+          die "Port ${want_port} appears to be in use; re-run with --force to override"
+        fi
+      fi
+    fi
+  fi
 
   # Create data dir and optionally copy from an existing instance
   local dat="/srv/${name}/data"
@@ -730,6 +779,14 @@ cmd_instance_add() {
   if [[ -n "$fromInst" ]]; then
     local src="/srv/${fromInst}/data"
     [[ -d "$src" ]] || die "Source data missing: $src"
+    # If destination is non-empty, require --force to proceed (rsync --delete is destructive)
+    if [[ -d "$dat" ]] && find "$dat" -mindepth 1 -maxdepth 1 | read -r _; then
+      if (( force == 1 )); then
+        warn "--force: overwriting existing contents of ${dat} from ${src}"
+      else
+        die "Target ${dat} is not empty; re-run with --force to overwrite (rsync --delete)"
+      fi
+    fi
     if command -v rsync >/dev/null 2>&1; then
       rsync -a --delete "$src/." "$dat/"
     else
@@ -770,7 +827,11 @@ cmd_instance_add() {
   local unit="/etc/systemd/system/${name}-budgetapp.service"
   _unit_text "$name" > "$unit"
   systemctl daemon-reload
-  systemctl enable --now "${name}-budgetapp.service"
+  if (( no_start == 1 )); then
+    log "instance add: created unit ${name}-budgetapp.service (not enabled/started; use: systemctl enable --now ${name}-budgetapp.service)"
+  else
+    systemctl enable --now "${name}-budgetapp.service"
+  fi
 
   log "instance add: $name -> $(basename "$tgt")"
   log "instance add: ${name} port=${port}"

@@ -130,11 +130,23 @@ _actualctl()
       else
         case "${words[2]}" in
           add)
-            # actualctl instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT]
+            # actualctl instance add <NAME> <ver|development|test|production> [--from SRC] [--port PORT] [--no-start] [--force]
             case $cword in
               3) ;; # free-form NAME
               4) COMPREPLY=( $(compgen -W "$versions development test production" -- "$cur") ) ;;
-              *) COMPREPLY=( $(compgen -W "--from --port" -- "$cur") ) ;;
+              *)
+                case "$prev" in
+                  --from)
+                    COMPREPLY=( $(compgen -W "$instances" -- "$cur") )
+                    ;;
+                  --port)
+                    COMPREPLY=( $(compgen -W "5001 5002 5003 5004 5005 5010 5012" -- "$cur") )
+                    ;;
+                  *)
+                    COMPREPLY=( $(compgen -W "--from --port --no-start --force" -- "$cur") )
+                    ;;
+                esac
+                ;;
             esac
             ;;
           rm)
