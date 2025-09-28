@@ -1,6 +1,9 @@
 
 
 #!/usr/bin/env bash
+# tkl-actual-bootstrap (bootstrap) Bash Completion
+# Completion-Version : v1.11.0  # keep in sync with scripts/bootstrap.sh Script-Version
+# SPDX-License-Identifier: GPL-3.0-or-later
 # -----------------------------------------------------------------------------
 # Bash completion for: bootstrap.sh (tkl-actual-bootstrap)
 # Safe and side-effect free. No external dependencies required.
@@ -32,7 +35,7 @@ _tklab_bootstrap()
   # Keep this list in sync with scripts/bootstrap.sh
   local opts="
     --yes -y --dry-run
-    --domain --install-version --ctl-path
+    --domain --install-version --ctl-path --instances
     --help --version
     --update-install --with-units --with-nginx --update-install-all
   "

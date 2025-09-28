@@ -1,4 +1,4 @@
-tkl-actual-bootstrap  v0.25.0
+tkl-actual-bootstrap  v1.0.0-rc1
 Bootstrap for running Actual Sync Server on TurnKey Linux (NodeJS appliance v18)
 
 License: GNU GPLv3
@@ -15,7 +15,12 @@ QUICK START
    ./scripts/bootstrap.sh --dry-run --domain example.com
 
 3) Apply changes (live, non-interactive):
+   # Default: create development/test/production and render per‑instance vhosts via actualctl
    ./scripts/bootstrap.sh -y --domain example.com
+
+   # Override which instances to create (NAME[:PORT][@FQDN])
+   ./scripts/bootstrap.sh -y --domain example.com \
+     --instances "prod:5099@budget.example.com,staging:5002"
 
 Notes:
 - If you pass --domain, you must also pass --yes (live) or --dry-run (preview).
@@ -23,6 +28,8 @@ Notes:
 - By default, bootstrap installs the version pinned in scripts/bootstrap.sh and installs the
   "actualctl" CLI into /usr/local/sbin/actualctl (override with --ctl-path).
 - To install a specific Actual Sync Server version, add --install-version vX.Y.Z (example: --install-version v25.7.1)
+- **RC1 change:** Bootstrap now delegates per‑instance work (config.json, systemd unit, Nginx vhost) to
+  `actualctl instance add` for each instance. Use `--instances "NAME[:PORT][@FQDN],..."` to customize.
 
 
 PREREQUISITES
@@ -42,7 +49,7 @@ Option A — Clone the repo
   git clone https://github.com/DocCyblade/tkl-actual-bootstrap.git
   cd tkl-actual-bootstrap
   # (Optional) pin to a release tag when available
-  # git checkout v0.25.0
+  # git checkout v1.0.0-rc1
 
   # Install a specific Actual Sync Server version (example)
   ./scripts/bootstrap.sh --install-version v25.7.1
@@ -51,7 +58,7 @@ Option B — Download a release archive
   sudo su -
   apt-get update && apt-get install -y curl unzip
   cd /opt
-  # Replace VERSION with the release you want (e.g., v0.25.0)
+  # Replace VERSION with the release you want (e.g., v1.0.0-rc1)
   curl -L -o tkl-actual-bootstrap.zip \
     "https://github.com/DocCyblade/tkl-actual-bootstrap/archive/refs/tags/VERSION.zip"
   unzip tkl-actual-bootstrap.zip
@@ -77,17 +84,17 @@ Post-install checks
   #   curl -fsS http://127.0.0.1:<port>/health || true
 
 
-UPDATING INSTALLED FILES (CLI/DOCS/UNITS/NGINX)
------------------------------------------------
+UPDATING INSTALLED FILES (CLI/DOCS; OPTIONAL UNITS/NGINX)
+--------------------------------------------------------
 Refresh the installed CLI, docs, and related assets without changing the app version:
 
   # Minimal refresh (VERSION, docs, actualctl)
   ./scripts/bootstrap.sh --update-install
 
-  # Also reinstall systemd units (daemon-reload, enable/start)
+  # Also reinstall systemd units (daemon-reload, enable/start) for *discovered* instances
   ./scripts/bootstrap.sh --update-install --with-units
 
-  # Also re-render Nginx vhosts and reload (requires domain configured or pass one)
+  # Also re-render Nginx vhosts for *discovered* instances (requires domain configured or pass one)
   ./scripts/bootstrap.sh --update-install --with-nginx -y --domain example.com
 
   # Everything above at once
@@ -97,9 +104,7 @@ Refresh the installed CLI, docs, and related assets without changing the app ver
 INSTALLATION LAYOUT
 -------------------
 /srv/app/vX.Y.Z            Local npm install of @actual-app/sync-server
-/srv/app/development       Symlink -> /srv/app/vX.Y.Z
-/srv/app/test              Symlink -> /srv/app/vX.Y.Z
-/srv/app/production        Symlink -> /srv/app/vX.Y.Z
+/srv/app/<instance>        Symlink -> /srv/app/vX.Y.Z (managed by actualctl)
 /srv/<instance>/data       ACTUAL_DATA_DIR (config.json lives here)
 - development : 5006
 - test        : 5000
@@ -107,7 +112,7 @@ INSTALLATION LAYOUT
 /srv/backups               Backup archives
 /etc/actual-budget/env     BUDGET_DOMAIN=example.com
 /etc/systemd/system/*      Instance units (<instance>-budgetapp.service)
-/etc/nginx/sites-available/*-budgetapp.conf  Nginx vhosts (enabled via symlink)
+/etc/nginx/sites-available/actual-<instance>.conf  Nginx vhosts (enabled via symlink)
 
 
 HEALTH & ADMIN
@@ -122,20 +127,17 @@ CLI helpers:
 - ./scripts/bootstrap.sh --version
 
 
-WHAT BOOTSTRAP DOES
--------------------
+WHAT BOOTSTRAP DOES (RC1)
+-------------------------
 - Creates service user "budget-server" with home /home/budget-server and shell /bin/bash.
-- Ensures directories: /srv/app, /srv/backups, /srv/<instance>/data.
+- Ensures base directories: /srv/app, /srv/backups.
 - Installs sync-server locally under /srv/app/vX.Y.Z as "budget-server".
-- Links per-instance app symlinks: /srv/app/{development,test,production} -> /srv/app/vX.Y.Z.
-- Seeds /srv/<instance>/data/config.json from configs/config.json.tpl (fallback inline JSON).
-- Writes systemd units with graceful stop (SIGINT, TimeoutStopSec=15) and conservative hardening.
-- Writes Nginx vhosts with TLS, /healthz, /health/upstream.
-- Installs "actualctl" into PATH by default (override path with --ctl-path).
-- Installs package VERSION manifest to /usr/share/tkl-actual-bootstrap/VERSION
+- Installs the "actualctl" CLI + docs/completions.
 - Records domain in /etc/actual-budget/env (BUDGET_DOMAIN=...).
+- Delegates **per-instance** tasks to `actualctl instance add` for each instance (default: development, test, production),
+  or as overridden via `--instances "NAME[:PORT][@FQDN],..."`.
 
-Systemd units (per instance):
+Systemd units (per instance, authored by actualctl):
 - Name: <instance>-budgetapp.service
 - WorkingDirectory: /srv/app/<instance>  (symlink -> /srv/app/vX.Y.Z)
 - Environment: ACTUAL_DATA_DIR=/srv/<instance>/data
@@ -164,7 +166,9 @@ Backups:
 
 Instances:
   actualctl instance add staging v25.7.1 --from production --port 5002
+  actualctl instance add family v25.7.1 --port 5010 --domain budget.family.tld
   actualctl instance set-port staging 5003
+  actualctl instance set-domain family none
   actualctl instance rm staging --purge
 
 Services and logs:
@@ -195,14 +199,14 @@ MIGRATION FROM PRE–v0.20
 - See docs/MIGRATION.txt for step-by-step restore and validation
 
 
-NOTES FOR v0.25.0
------------------
-- CLI: removed the deprecated installer alias `--version <ver>`; use `--install-version <ver>`. `--version` (no args) prints script/package versions.
-- Docs: README now includes "Installation (fresh TurnKey Linux NodeJS)" with clone and release-archive paths plus post-install checks.
+NOTES FOR RC1 (v1.0.0-rc1)
+--------------------------
+- Bootstrap delegates per‑instance work to `actualctl instance add`.
+- `--instances` accepts `NAME[:PORT][@FQDN]` to customize which instances get created and how they’re exposed.
+- Completions are versioned: `Completion-Version : v1.11.0` (actualctl/bootstrap) to track the script they complete.
 - Dynamic versioning in both scripts; banners and `--version` outputs show `script <Script-Version> (package <PKG_VERSION>)`.
-- `actualctl doctor --fix` installs/refreshes the system VERSION manifest.
-- The VERSION manifest is installed to `/usr/share/tkl-actual-bootstrap/VERSION`.
-- Synchronized headers and plain‑text docs; see CHANGELOG.txt for full details.
+- `actualctl doctor --fix` installs/refreshes the system VERSION manifest at `/usr/share/tkl-actual-bootstrap/VERSION`.
+- See CHANGELOG.txt for the full history.
 
 
 LICENSE

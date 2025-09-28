@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.11.0
+# Script-Version : v1.11.1
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.11.1: align Nginx site name with docs (actual-<instance>.conf); add /healthz (static) and make /health/upstream proxied to backend; upstream health accepts 200/404.
 #   - v1.11.0: instance add supports --domain & writes per-instance Nginx site (HTTP only; no LE). New `instance set-domain` to change/clear domain. health` now honors per-instance public_domain. `instance rm` removes the site.
 #   - v1.10.9: instance add gains --no-start and --force; validates --port (numeric) and checks for in-use ports (can override with --force).
 #   - v1.10.8: list-versions marks already installed releases (bold when TTY; otherwise '** ' prefix) and appends [installed].
@@ -378,8 +379,8 @@ write_nginx_site() {
   local inst="$1" domain="$2" port="$3"
   [[ -n "$inst" && -n "$domain" && -n "$port" ]] || { err "write_nginx_site: missing args"; return 2; }
 
-  local avail="/etc/nginx/sites-available/${inst}-budgetapp.conf"
-  local enabled="/etc/nginx/sites-enabled/${inst}-budgetapp.conf"
+  local avail="/etc/nginx/sites-available/actual-${inst}.conf"
+  local enabled="/etc/nginx/sites-enabled/actual-${inst}.conf"
 
   install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled
 
@@ -390,13 +391,24 @@ server {
     access_log /var/log/nginx/__INST__.access.log;
     error_log  /var/log/nginx/__INST__.error.log;
 
-    # Upstream health endpoint explicitly returns 200 for CLI checks
-    location /health/upstream {
+    # Static health: validates Nginx is up
+    location /healthz {
         return 200;
     }
 
+    # Proxied health: validates backend reachability (200/404 acceptable)
+    location /health/upstream {
+        proxy_pass         http://127.0.0.1:__PORT__/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+
     location / {
-        proxy_pass         http://127.0.0.1:__PORT__;
+        proxy_pass         http://127.0.0.1:__PORT__/;
         proxy_http_version 1.1;
         proxy_set_header   Host $host;
         proxy_set_header   X-Real-IP $remote_addr;
@@ -428,8 +440,8 @@ CONF
 remove_nginx_site() {
   local inst="$1"
   [[ -n "$inst" ]] || { err "remove_nginx_site: missing instance"; return 2; }
-  local avail="/etc/nginx/sites-available/${inst}-budgetapp.conf"
-  local enabled="/etc/nginx/sites-enabled/${inst}-budgetapp.conf"
+  local avail="/etc/nginx/sites-available/actual-${inst}.conf"
+  local enabled="/etc/nginx/sites-enabled/actual-${inst}.conf"
 
   rm -f "$enabled" "$avail"
   if nginx -t >/dev/null 2>&1; then
@@ -1074,8 +1086,8 @@ cmd_health() {
   if [[ -n "$pdom" ]]; then
     local up="http://${pdom}/health/upstream"
     local code="$(_curl_code "$up")"
-    if [[ "$code" == "200" ]]; then
-      log "health: upstream OK (${inst}) 200 ${up}"
+    if [[ "$code" == "200" || "$code" == "404" ]]; then
+      log "health: upstream OK (${inst}) code=${code} ${up}"
     else
       err "health: upstream FAIL (${inst}) code=${code:-NA} ${up}"
       rc=1
@@ -1084,8 +1096,8 @@ cmd_health() {
     local host="${inst}-budgetapp.${bootstrap_domain}"
     local up="https://${host}/health/upstream"
     local code="$(_curl_code "$up")"
-    if [[ "$code" == "200" ]]; then
-      log "health: upstream OK (${inst}) 200 ${up}"
+    if [[ "$code" == "200" || "$code" == "404" ]]; then
+      log "health: upstream OK (${inst}) code=${code} ${up}"
     else
       err "health: upstream FAIL (${inst}) code=${code:-NA} ${up}"
       rc=1

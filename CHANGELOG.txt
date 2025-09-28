@@ -14,6 +14,16 @@ WHAT’S NEW — v1.0.0-rc1
   - Plain-text docs installed to `/usr/share/tkl-actual-bootstrap/docs/`.
 - Defaults
   - Default Actual Sync Server remains **v25.7.1**.
+- Bootstrap & instance lifecycle
+  - **Simplified bootstrap**: delegates per‑instance work (config.json, systemd unit, and per‑instance Nginx vhost) to `actualctl instance add`.
+  - **Overrides**: new bootstrap `--instances "NAME[:PORT][@FQDN],..."` to customize which instances are created, their ports, and optional FQDNs (fallback is `<name>-budgetapp.<domain>`).
+  - **Update/refresh behavior**: `--update-install --with-units/--with-nginx` now refresh only *discovered* instances; defaults are not recreated during updates.
+- Bug fixes (RC1)
+  - `actualctl list`: show only **existing** instances (data dir or app alias); removed always‑present dev/test/prod seeds.
+  - `actualctl list`: fixed duplicate `inactive` output when a unit file does not exist.
+- Completions/docs
+  - Completion files now include a `Completion-Version` header kept in sync with the script they complete.
+  - Docs updated for per‑instance domain (`--domain` on add / `instance set-domain`) and `--instances` syntax.
 
 WHAT’S NEW — v0.25.0
 -----------------------
@@ -93,6 +103,9 @@ WHAT’S NEW — v0.23.2
 
 2) scripts/bootstrap.sh — full history (newest → oldest)
 --------------------------------------------------------
+- v1.11.0  RC1 simplification: delegate per‑instance work to `actualctl instance add`; installed CLI/docs/completions; dynamic vhost printing; no new features beyond RC1 scope.
+- v1.10.7  `--instances` supports NAME[:PORT][@FQDN] with per‑instance FQDN override for Nginx; help/usage updated.
+- v1.10.6  Added `--instances` to override default dev/test/prod and ports; Nginx/unit rendering iterates instances dynamically; update path discovers existing instances only.
 - v1.10.5  Preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure); banner defaults to ASCII (opt‑in UTF‑8 with USE_UTF8_BANNER=1).
 - v1.10.4  Prefer system VERSION manifest over local ./VERSION for package reporting; aligns with actualctl; no behavior change when both match.
 - v1.10.3  Bash completions installer (actualctl & bootstrap) wired into normal and `--update-install` paths; prints hint to reload bash‑completion; no app behavior change.
@@ -136,6 +149,7 @@ WHAT’S NEW — v0.23.2
 
 3) scripts/actualctl — full history (newest → oldest)
 -----------------------------------------------------
+- v1.11.0  List shows only existing instances (no default seeding); fixed duplicate "inactive" output; docs/completions sync (add `status` in completion, `set-domain` docs); no breaking changes.
 - v1.10.5  New "prune-versions" to clean unused app versions; supports --dry-run, --keep N, --older-than DAYS; header sync for v1.0.0-rc1.
 - v1.10.4  Banner defaults to ASCII; opt‑in UTF‑8 with USE_UTF8_BANNER=1; respects NO_COLOR/TTY; header sync.
 - v1.10.3  Verify: nounset‑safe cleanup trap; accepts versions with or without a leading `v`; prefers system VERSION manifest over local; additional `set -u` fixes; adaptive banner.

@@ -16,6 +16,8 @@
 #
 # Changes since v0.23.3:
 #   - v1.10.5: preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure).
+#   - v1.10.6: add --instances override to create a custom set of instances with optional per-instance ports; nginx/unit rendering now iterates dynamically; update path discovers existing instances instead of recreating defaults.
+#   - v1.10.7: --instances supports NAME[:PORT][@FQDN]; per-instance FQDN override for Nginx vhosts.
 #   - v1.10.4: prefer system VERSION manifest (/usr/share/tkl-actual-bootstrap/VERSION) over local ./VERSION for package reporting; aligns with actualctl; no behavior change when both match.
 #   - v1.10.3: bash completions installer (actualctl & bootstrap) wired into normal and --update-install paths; prints hint to reload bash-completion; no app behavior change.
 #   - v1.10.2: add --update-install flags: --with-units, --with-nginx, and --update-install-all; refresh units/nginx in update path; require domain for nginx.
@@ -109,7 +111,7 @@ banner() {
 
 usage_quick() {
   cat <<'HELP'
-Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--install-version vX.Y.Z] [--ctl-path /path/actualctl] [--version]
+Usage: ./scripts/bootstrap.sh [--yes|-y] [--dry-run] [--domain <name>] [--install-version vX.Y.Z] [--ctl-path /path/actualctl] [--instances "NAME[:PORT][@FQDN][,NAME[:PORT][@FQDN],...]"] [--version]
 Hint : ./scripts/bootstrap.sh --help   # full docs | Use --update-install to refresh CLI/docs
 HELP
 }
@@ -123,6 +125,7 @@ Usage:
     [--domain <name>]
     [--install-version vX.Y.Z]
     [--ctl-path /usr/local/sbin/actualctl]
+    [--instances "NAME[:PORT][@FQDN][,NAME[:PORT][@FQDN],..."]
     [--help]
     [--version]
     --update-install
@@ -138,6 +141,15 @@ Options:
                        If omitted, you'll be prompted (interactive mode).
   --install-version VER  Actual sync-server npm version to install (default: v25.7.1)
   --ctl-path PATH      Destination for installing actualctl (default: /usr/local/sbin/actualctl)
+  --instances SPEC    Override the default instances. SPEC is a comma-separated list of NAME[:PORT][@FQDN].
+                      Examples:
+                        --instances "development,test,production"                       (defaults)
+                        --instances "development:5006,test:5000,production:5001"       (explicit defaults)
+                        --instances "prod:5099@budget.example.com"                     (single custom with FQDN)
+                        --instances "staging:5002@staging.budget.tld,prod@budget.tld"  (two custom; prod auto-port)
+                      If PORT is omitted for a default name, the default port is used.
+                      If PORT is omitted for a non-default name, an available port ≥5002 is assigned.
+                      If FQDN is omitted, the vhost defaults to <NAME>-budgetapp.<DOMAIN>.
   --help               Show this help and exit
   --version            Show script/package versions and exit
   --update-install     Refresh installed assets (actualctl, docs, VERSION) only; no app install/links
@@ -173,6 +185,10 @@ BACKUPS="/srv/backups"
 # Well-known instances + default ports
 INSTANCES=(development test production)
 declare -A PORTS=( ["development"]=5006 ["test"]=5000 ["production"]=5001 )
+declare -A DOMAINS=()
+
+# Instance override input (set via --instances)
+INSTANCE_SPEC_INPUT=""
 
 # Certificates (TurnKey defaults)
 CERT_CRT="${CERT_CRT:-/etc/ssl/private/cert.pem}"
@@ -225,6 +241,114 @@ copy_if_changed() {
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
+# Instance specification parsing & discovery
+# ───────────────────────────────────────────────────────────────────────────────
+is_valid_name() { [[ "$1" =~ ^[a-z0-9-]+$ ]]; }
+
+next_free_port() {
+  local start=${1:-5002} used="$2" p
+  for ((p=start; p<65000; p++)); do
+    if [[ " $used " != *" $p "* ]]; then
+      echo "$p"; return 0
+    fi
+  done
+  echo 0; return 1
+}
+
+parse_instances_spec() {
+  # If no override provided, keep defaults (INSTANCES/PORTS already set)
+  [[ -n "$INSTANCE_SPEC_INPUT" ]] || return 0
+
+  local spec="$INSTANCE_SPEC_INPUT" item name port used_ports="" out_names=() left fqdn
+  declare -A out_ports
+  declare -A out_domains
+
+  # Normalize and split on commas
+  spec="${spec//[[:space:]]/}"
+  IFS=',' read -r -a items <<< "$spec"
+
+  for item in "${items[@]}"; do
+    [[ -n "$item" ]] || continue
+    # Split optional @FQDN first, then optional :PORT
+    left="$item"; fqdn=""
+    if [[ "$left" == *"@"* ]]; then
+      fqdn="${left##*@}"; left="${left%%@*}"
+    fi
+    if [[ "$left" == *":"* ]]; then
+      name="${left%%:*}"; port="${left##*:}"
+    else
+      name="$left"; port=""
+    fi
+    is_valid_name "$name" || die "Invalid instance name: $name (use lowercase a-z, 0-9, and dashes)"
+    if [[ -n "$port" ]]; then
+      [[ "$port" =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]] || die "Invalid port for $name: $port"
+      used_ports+=" $port"
+    fi
+    out_names+=("$name")
+    out_ports["$name"]="$port"
+    if [[ -n "$fqdn" ]]; then
+      [[ "$fqdn" =~ ^[A-Za-z0-9.-]+$ ]] || die "Invalid FQDN for $name: $fqdn"
+      out_domains["$name"]="$fqdn"
+    fi
+  done
+
+  ((${#out_names[@]})) || die "--instances resolved to empty set"
+
+  # Assign missing ports
+  local n p
+  for n in "${out_names[@]}"; do
+    p="${out_ports[$n]}"
+    if [[ -z "$p" ]]; then
+      case "$n" in
+        development) p="${PORTS[development]}" ;;
+        test)        p="${PORTS[test]}" ;;
+        production)  p="${PORTS[production]}" ;;
+        *)           p="$(next_free_port 5002 "$used_ports")" ;;
+      esac
+      [[ "$p" != 0 ]] || die "Unable to assign a free port for $n"
+      out_ports["$n"]="$p"
+      used_ports+=" $p"
+    fi
+  done
+
+  # Overwrite globals with parsed results
+  INSTANCES=("${out_names[@]}")
+  # Rebuild PORTS associative map
+  for n in "${!PORTS[@]}"; do unset 'PORTS[$n]'; done
+  for n in "${INSTANCES[@]}"; do PORTS["$n"]="${out_ports[$n]}"; done
+  # Rebuild DOMAINS associative map
+  for n in "${!DOMAINS[@]}"; do unset 'DOMAINS[$n]'; done
+  for n in "${INSTANCES[@]}"; do
+    if [[ -n "${out_domains[$n]:-}" ]]; then DOMAINS["$n"]="${out_domains[$n]}"; fi
+  done
+}
+
+discover_existing_instances() {
+  # Discover instances by existing /srv/<name>/data or /srv/app/<name> symlinks (excluding version dirs)
+  local out=() d n seen=" "
+
+  for d in /srv/*; do
+    [[ -d "$d/data" ]] || continue
+    n="$(basename "$d")"
+    out+=("$n"); seen+="$n "
+  done
+
+  shopt -s nullglob
+  for d in "${BASE_APP}"/*; do
+    [[ -L "$d" ]] || continue
+    n="$(basename "$d")"
+    [[ "$n" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
+    [[ " $seen " == *" $n "* ]] || out+=("$n")
+  done
+  shopt -u nullglob
+
+  if ((${#out[@]})); then
+    IFS=$'\n' printf '%s\n' "${out[@]}" | sort
+    unset IFS
+  fi
+}
+
+# ───────────────────────────────────────────────────────────────────────────────
 # Arg parsing
 # ───────────────────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -234,6 +358,7 @@ while [[ $# -gt 0 ]]; do
     --domain)     BUDGET_DOMAIN="${2:-}"; DOMAIN_FLAG_SET=1; shift 2 ;;
     --install-version) VERSION="${2:-}"; shift 2 ;;
     --ctl-path)   CTL_DST="${2:-/usr/local/sbin/actualctl}"; shift 2 ;;
+    --instances)  INSTANCE_SPEC_INPUT="${2:-}"; shift 2 ;;
     --version)     echo "bootstrap.sh ${SCRIPT_VERSION} (package ${PKG_VERSION})"; exit 0 ;;
     --update-install) DO_UPDATE_INSTALL=1; shift ;;
     --with-units) DO_WITH_UNITS=1; shift ;;
@@ -249,6 +374,9 @@ if (( DOMAIN_FLAG_SET == 1 )); then
     die "--domain requires either --yes (for a live, non-interactive run) or --dry-run (for a preview)."
   fi
 fi
+
+# Parse --instances if provided (overrides INSTANCES/PORTS)
+parse_instances_spec
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Preconditions
@@ -520,9 +648,11 @@ UNIT
 }
 
 install_units() {
+  local names=("$@")
+  if ((${#names[@]}==0)); then names=("${INSTANCES[@]}"); fi
   log "Installing systemd units"
   local changed=0
-  for inst in "${INSTANCES[@]}"; do
+  for inst in "${names[@]}"; do
     local unit="/etc/systemd/system/${inst}-budgetapp.service"
     local tmp; tmp="$(mktemp)"
     unit_text "$inst" > "$tmp"
@@ -540,7 +670,7 @@ install_units() {
     run "systemctl daemon-reload"
   fi
   log "Enabling & starting services"
-  for inst in "${INSTANCES[@]}"; do
+  for inst in "${names[@]}"; do
     run "systemctl enable --now '${inst}-budgetapp.service'"
   done
 }
@@ -621,18 +751,19 @@ render_nginx_site() {
 }
 
 install_nginx() {
+  local names=("$@")
+  if ((${#names[@]}==0)); then names=("${INSTANCES[@]}"); fi
   log "Installing Nginx vhosts"
-  local dev_host="development-budgetapp.${BUDGET_DOMAIN}"
-  local tst_host="test-budgetapp.${BUDGET_DOMAIN}"
-  local prd_host="production-budgetapp.${BUDGET_DOMAIN}"
 
   # Warn if cert files are missing (common Gotcha on fresh TurnKey)
   [[ -f "$CERT_CRT" ]] || warn "SSL cert not found: $CERT_CRT"
   [[ -f "$CERT_KEY" ]] || warn "SSL key  not found: $CERT_KEY"
 
-  render_nginx_site "development" "$dev_host" "${PORTS[development]}"
-  render_nginx_site "test"        "$tst_host" "${PORTS[test]}"
-  render_nginx_site "production"  "$prd_host" "${PORTS[production]}"
+  local inst host
+  for inst in "${names[@]}"; do
+    host="${DOMAINS[$inst]:-${inst}-budgetapp.${BUDGET_DOMAIN}}"
+    render_nginx_site "$inst" "$host" "${PORTS[$inst]}"
+  done
 
   log "Testing Nginx config"
   if [[ $DRY_RUN -eq 1 ]]; then
@@ -754,8 +885,13 @@ main() {
     if (( DO_WITH_UNITS == 1 )); then
       log "Refreshing systemd units"
       ensure_user
-      ensure_dirs
-      install_units
+      # Discover existing instances; do not recreate missing defaults in update path
+      mapfile -t EXISTING < <(discover_existing_instances || true)
+      if ((${#EXISTING[@]})); then
+        install_units "${EXISTING[@]}"
+      else
+        warn "No existing instances discovered under /srv or /srv/app; skipping unit reinstall"
+      fi
     fi
     if (( DO_WITH_NGINX == 1 )); then
       # Ensure we have a domain (from env or arg); do not prompt here
@@ -765,7 +901,12 @@ main() {
         fi
       fi
       log "Refreshing Nginx vhosts for domain: $BUDGET_DOMAIN"
-      install_nginx
+      mapfile -t EXISTING_NGX < <(discover_existing_instances || true)
+      if ((${#EXISTING_NGX[@]})); then
+        install_nginx "${EXISTING_NGX[@]}"
+      else
+        warn "No existing instances discovered; skipping Nginx vhost rendering"
+      fi
     fi
     log "Bash completion installed to /etc/bash_completion.d (reload your shell or source /etc/bash_completion)"
     log "Update-install complete."
@@ -806,9 +947,9 @@ main() {
 
   log "Complete."
   log "Visit:"
-  log "  https://development-budgetapp.$BUDGET_DOMAIN/healthz"
-  log "  https://test-budgetapp.$BUDGET_DOMAIN/healthz"
-  log "  https://production-budgetapp.$BUDGET_DOMAIN/healthz"
+  for inst in "${INSTANCES[@]}"; do
+    log "  https://${inst}-budgetapp.$BUDGET_DOMAIN/healthz"
+  done
 }
 
 main "$@"
