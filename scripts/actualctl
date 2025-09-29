@@ -336,6 +336,7 @@ find_vhost_tpl() {
     "/usr/share/tkl-actual-bootstrap/templates/vhost.conf.tpl"
     "${here}/configs/vhost.conf.tpl"
     "${here}/templates/vhost.conf.tpl"
+    "${here}/nginx/templates/vhost.conf.tpl"
     "./configs/vhost.conf.tpl"
   )
   local f

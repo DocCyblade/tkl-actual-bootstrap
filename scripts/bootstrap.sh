@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/bootstrap.sh
 # Version: v1.0.0-rc1
-# Script-Version : v1.11.0
+# Script-Version : v1.11.1
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -15,6 +15,7 @@
 #   and installs 'actualctl' into PATH by default.
 #
 # Changes since v0.23.3:
+#   - v1.11.1: install nginx vhost template to system share for actualctl (vhost.conf.tpl -> /usr/share/tkl-actual-bootstrap/templates/); no behavior change beyond ensuring template availability.
 #   - v1.11.0: RC1 simplification — delegate per-instance work to 'actualctl instance add'; docs/completions bumped; no new features (RC1 freeze).
 #   - v1.10.5: preflight npm version check for --install-version; atomic install via temp build dir (no leftover dirs on failure).
 #   - v1.10.6: add --instances override to create a custom set of instances with optional per-instance ports; nginx/unit rendering now iterates dynamically; update path discovers existing instances instead of recreating defaults.
@@ -818,6 +819,23 @@ install_docs() {
   done < <(find "$src_dir" -type f -print0)
 }
 
+# Install nginx vhost template to a system path used by actualctl
+install_templates() {
+  local bundle_dir src dest_dir dst
+  bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  src="${bundle_dir}/nginx/templates/vhost.conf.tpl"
+  dest_dir="/usr/share/tkl-actual-bootstrap/templates"
+  dst="${dest_dir}/vhost.conf.tpl"
+
+  if [[ -f "$src" ]]; then
+    log "Installing nginx vhost template to $dst"
+    run "install -d -m 0755 \"$dest_dir\""
+    copy_if_changed "$src" "$dst"
+  else
+    warn "nginx vhost template not found at $src; actualctl requires it to render sites"
+  fi
+}
+
 # Install bash completion files for actualctl and bootstrap
 install_completions() {
   local bundle_dir src_dir dest_dir
@@ -881,6 +899,7 @@ main() {
     log "Refreshing installed assets (VERSION/docs/CLI)"
     install_version_manifest
     install_docs
+    install_templates
     install_ctl
     install_completions
     if (( DO_WITH_UNITS == 1 )); then
@@ -939,6 +958,7 @@ main() {
   fi
   install_version "$VERSION"
   install_ctl
+  install_templates
 
   # Delegate instances to actualctl (single source of truth)
   for inst in "${INSTANCES[@]}"; do
