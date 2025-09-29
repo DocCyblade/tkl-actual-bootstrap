@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.11.1
+# Script-Version : v1.11.2
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.11.2: remove unsupported config.json field public_domain; set-domain no longer edits config.json; health derives FQDN from Nginx site (server_name); docs/help text adjusted.
 #   - v1.11.1: align Nginx site name with docs (actual-<instance>.conf); add /healthz (static) and make /health/upstream proxied to backend; upstream health accepts 200/404.
 #   - v1.11.0: instance add supports --domain & writes per-instance Nginx site (HTTP only; no LE). New `instance set-domain` to change/clear domain. health` now honors per-instance public_domain. `instance rm` removes the site.
 #   - v1.10.9: instance add gains --no-start and --force; validates --port (numeric) and checks for in-use ports (can override with --force).
@@ -160,7 +161,7 @@ Instances:
   instance set-port <NAME> <PORT>
                               Update /srv/<NAME>/data/config.json port and restart service
   instance set-domain <NAME> <FQDN|none>
-                              Write/remove a per-instance Nginx site and update config.json public_domain; reload Nginx
+                              Write/remove a per-instance Nginx site and reload Nginx (config.json is untouched)
 
 Service wrappers:
   service <INSTANCE> start|stop|restart|status
@@ -309,6 +310,19 @@ json_get() {
         exit
       }' "$file" 2>/dev/null
   fi
+}
+
+# Read per-instance FQDN from Nginx site if present
+instance_domain() {
+  local inst="$1" f="/etc/nginx/sites-available/actual-${inst}.conf" line dom=""
+  [[ -f "$f" ]] || return 1
+  # Find the first server_name directive and capture the next token (strip trailing ';')
+  line="$(awk '/server_name/{print; exit}' "$f" 2>/dev/null || true)"
+  [[ -n "$line" ]] || return 1
+  dom="$(printf '%s' "$line" | awk '{for(i=1;i<=NF;i++) if($i=="server_name"){print $(i+1); exit}}')"
+  dom="${dom%;}"
+  [[ -n "$dom" ]] || return 1
+  printf '%s\n' "$dom"
 }
 
 # Return one version per line from npm (no leading 'v'); prefers jq, falls back to Node
@@ -516,10 +530,10 @@ cmd_env() {
   local link="${BASE_APP}/${inst}"
   local ver="(none)"
   [[ -L "$link" ]] && ver="$(basename "$(readlink -f "$link")")"
-  local port host pdom; port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"; pdom="$(json_get "$cfg" public_domain)"
+  local port host dom; port="$(json_get "$cfg" port)"; host="$(json_get "$cfg" hostname)"; dom="$(instance_domain "$inst" || true)"
 
-  printf "%s:\n  ACTUAL_DATA_DIR=%s\n  config=%s (port=%s host=%s public_domain=%s)\n  app_link=%s -> %s\n" \
-    "$inst" "$dat" "$cfg" "${port:-?}" "${host:-?}" "${pdom:--}" "$link" "$ver"
+  printf "%s:\n  ACTUAL_DATA_DIR=%s\n  config=%s (port=%s host=%s domain=%s)\n  app_link=%s -> %s\n" \
+    "$inst" "$dat" "$cfg" "${port:-?}" "${host:-?}" "${dom:--}" "$link" "$ver"
 }
 
 cmd_fetch() {
@@ -915,22 +929,12 @@ cmd_instance_add() {
     [[ -n "$port" ]] || die "Unable to find an available port"
   fi
 
-  if [[ -n "$dom" ]]; then
-    cat > "$cfg" <<EOF
-{
-  "port": ${port},
-  "hostname": "${host}",
-  "public_domain": "${dom}"
-}
-EOF
-  else
-    cat > "$cfg" <<EOF
+  cat > "$cfg" <<EOF
 {
   "port": ${port},
   "hostname": "${host}"
 }
 EOF
-  fi
   chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
 
   # Install and start systemd unit
@@ -983,26 +987,15 @@ cmd_instance_set_port() {
 
   local dat="/srv/${name}/data" cfg="${dat}/config.json"
   [[ -d "$dat" ]] || die "Instance data dir not found: $dat"
-  local host pdom; host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
-  pdom="$(json_get "$cfg" public_domain)"
+  local host; host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
 
   local tmp; tmp="$(mktemp)"
-  if [[ -n "$pdom" ]]; then
-    cat > "$tmp" <<EOF
-{
-  "port": ${newp},
-  "hostname": "${host}",
-  "public_domain": "${pdom}"
-}
-EOF
-  else
-    cat > "$tmp" <<EOF
+  cat > "$tmp" <<EOF
 {
   "port": ${newp},
   "hostname": "${host}"
 }
 EOF
-  fi
 
   install -m 0644 "$tmp" "$cfg"; rm -f "$tmp"
   chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
@@ -1020,30 +1013,13 @@ cmd_instance_set_domain() {
   local port host; port="$(json_get "$cfg" port)"; [[ -n "$port" ]] || die "Missing port in $cfg"
   host="$(json_get "$cfg" hostname)"; [[ -n "$host" ]] || host="127.0.0.1"
 
-  local tmp; tmp="$(mktemp)"
   if [[ "$fqdn" == "none" || "$fqdn" == "-" ]]; then
-    cat > "$tmp" <<EOF
-{
-  "port": ${port},
-  "hostname": "${host}"
-}
-EOF
     remove_nginx_site "$name" || true
     log "instance set-domain: ${name} domain cleared"
   else
-    cat > "$tmp" <<EOF
-{
-  "port": ${port},
-  "hostname": "${host}",
-  "public_domain": "${fqdn}"
-}
-EOF
     write_nginx_site "$name" "$fqdn" "$port" || warn "failed to enable nginx site for ${name}"
     log "instance set-domain: ${name} -> ${fqdn}"
   fi
-
-  install -m 0644 "$tmp" "$cfg"; rm -f "$tmp"
-  chown -R "$APP_USER:$APP_GROUP" "/srv/${name}"
 }
 
 cmd_service() {
@@ -1077,14 +1053,14 @@ cmd_health() {
     return 0
   fi
 
-  local cfg="/srv/${inst}/data/config.json" port pdom
+  local cfg="/srv/${inst}/data/config.json" port dom
   port="$(json_get "$cfg" port)"
-  pdom="$(json_get "$cfg" public_domain)"
+  dom="$(instance_domain "$inst" || true)"
   [[ -n "$port" ]] || { err "health: no port in $cfg"; return 1; }
 
-  # Prefer per-instance public_domain (HTTP), else use bootstrap domain pattern over HTTPS
-  if [[ -n "$pdom" ]]; then
-    local up="http://${pdom}/health/upstream"
+  # Prefer per-instance domain (from nginx), else use bootstrap domain pattern over HTTPS
+  if [[ -n "$dom" ]]; then
+    local up="http://${dom}/health/upstream"
     local code="$(_curl_code "$up")"
     if [[ "$code" == "200" || "$code" == "404" ]]; then
       log "health: upstream OK (${inst}) code=${code} ${up}"
