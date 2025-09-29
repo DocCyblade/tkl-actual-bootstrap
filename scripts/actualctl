@@ -2,7 +2,7 @@
 # ==============================================================================
 # tkl-actual-bootstrap : scripts/actualctl
 # Version: v1.0.0-rc1
-# Script-Version : v1.11.2
+# Script-Version : v1.11.3
 # Packaged-In    : v1.0.0-rc1
 # Package-Compat : >=v1.0.0-rc1 <v1.1.0
 # Last-Reviewed  : 2025-09-28 with package v1.0.0-rc1
@@ -14,6 +14,7 @@
 #   add/rm/set-port instances, and service/log helpers.
 #
 # Changes since v0.23.3:
+#   - v1.11.3: write_nginx_site now renders exclusively from vhost.conf.tpl (no inline fallback); errors if template missing.
 #   - v1.11.2: remove unsupported config.json field public_domain; set-domain no longer edits config.json; health derives FQDN from Nginx site (server_name); docs/help text adjusted.
 #   - v1.11.1: align Nginx site name with docs (actual-<instance>.conf); add /healthz (static) and make /health/upstream proxied to backend; upstream health accepts 200/404.
 #   - v1.11.0: instance add supports --domain & writes per-instance Nginx site (HTTP only; no LE). New `instance set-domain` to change/clear domain. health` now honors per-instance public_domain. `instance rm` removes the site.
@@ -312,6 +313,7 @@ json_get() {
   fi
 }
 
+
 # Read per-instance FQDN from Nginx site if present
 instance_domain() {
   local inst="$1" f="/etc/nginx/sites-available/actual-${inst}.conf" line dom=""
@@ -323,6 +325,24 @@ instance_domain() {
   dom="${dom%;}"
   [[ -n "$dom" ]] || return 1
   printf '%s\n' "$dom"
+}
+
+# Locate the nginx vhost template. Required for site rendering.
+find_vhost_tpl() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  local candidates=(
+    "/usr/share/tkl-actual-bootstrap/configs/vhost.conf.tpl"
+    "/usr/share/tkl-actual-bootstrap/templates/vhost.conf.tpl"
+    "${here}/configs/vhost.conf.tpl"
+    "${here}/templates/vhost.conf.tpl"
+    "./configs/vhost.conf.tpl"
+  )
+  local f
+  for f in "${candidates[@]}"; do
+    [[ -f "$f" ]] && { echo "$f"; return 0; }
+  done
+  return 1
 }
 
 # Return one version per line from npm (no leading 'v'); prefers jq, falls back to Node
@@ -398,45 +418,18 @@ write_nginx_site() {
 
   install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled
 
-  cat <<'CONF' > "$avail"
-server {
-    listen 80;
-    server_name __SERVER_NAME__;
-    access_log /var/log/nginx/__INST__.access.log;
-    error_log  /var/log/nginx/__INST__.error.log;
+  local tpl
+  tpl="$(find_vhost_tpl)" || { err "vhost.conf.tpl not found; cannot render nginx site for ${inst}"; return 3; }
 
-    # Static health: validates Nginx is up
-    location /healthz {
-        return 200;
-    }
-
-    # Proxied health: validates backend reachability (200/404 acceptable)
-    location /health/upstream {
-        proxy_pass         http://127.0.0.1:__PORT__/;
-        proxy_http_version 1.1;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
-    }
-
-    location / {
-        proxy_pass         http://127.0.0.1:__PORT__/;
-        proxy_http_version 1.1;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
-    }
-}
-CONF
-
-  # Fill in placeholders safely
-  sed -i "s/__SERVER_NAME__/${domain//\//\\/}/g" "$avail"
-  sed -i "s/__PORT__/${port}/g" "$avail"
-  sed -i "s/__INST__/${inst//\//\\/}/g" "$avail"
+  # Support either __PLACEHOLDER__ or {{PLACEHOLDER}} styles
+  sed \
+    -e "s/__SERVER_NAME__/${domain//\//\\/}/g" \
+    -e "s/{{SERVER_NAME}}/${domain//\//\\/}/g" \
+    -e "s/__PORT__/${port}/g" \
+    -e "s/{{PORT}}/${port}/g" \
+    -e "s/__INST__/${inst//\//\\/}/g" \
+    -e "s/{{INST}}/${inst//\//\\/}/g" \
+    "$tpl" > "$avail"
 
   ln -sfn "$avail" "$enabled"
 
